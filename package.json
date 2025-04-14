@@ -4,17 +4,19 @@
 	"private": true,
 	"scripts": {
 		"publish": "pnpm run cf-typegen && wrangler deploy",
-		"start": "pnpm run cf-typegen && wrangler dev --remote",
+		"dev": "pnpm run cf-typegen && wrangler dev --remote",
 		"cf-typegen": "wrangler types",
 		"type-check": "pnpm run cf-typegen && tsc"
 	},
 	"devDependencies": {
+		"@types/jsdom": "^21.1.7",
+		"@types/turndown": "^5.0.5",
 		"typescript": "^5.8.3",
 		"wrangler": "^4.10.0"
 	},
 	"dependencies": {
 		"@cloudflare/puppeteer": "^1.0.1",
-		"@types/node": "^22.14.1",
+		"@types/node": "^20.17.30",
 		"react-tweet": "^3.2.2"
 	}
 }

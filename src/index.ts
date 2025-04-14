@@ -1,16 +1,16 @@
-import puppeteer, { Browser as PuppeteerBrowser, Page as PuppeteerPage } from '@cloudflare/puppeteer';
+/// <reference lib="dom" />
+import puppeteer from '@cloudflare/puppeteer';
+import type { Browser as PuppeteerBrowser, Page } from '@cloudflare/puppeteer';
 import { Tweet } from 'react-tweet/api';
 import { html } from './response';
 
 export default {
 	async fetch(request: Request, env: Env) {
-		const ip = request.headers.get('cf-connecting-ip') || '';
+		const ip = request.headers.get('cf-connecting-ip');
 		if (!(env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', ''))) {
-			// If BACKEND_SECURITY_TOKEN is not set, then we will need to check the RATE LIMIT
-			const { success } = await env.RATELIMITER.limit({ key: ip });
+			const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-			// if (!success || request.url.includes('poemanalysis')) {
-			if (!success) {
+			if (!success || request.url.includes('poemanalysis')) {
 				return new Response('Rate limit exceeded', { status: 429 });
 			}
 		}
@@ -53,7 +53,7 @@ export class Browser {
 
 		const url = new URL(request.url).searchParams.get('url');
 		const enableDetailedResponse = new URL(request.url).searchParams.get('enableDetailedResponse') === 'true';
-		const crawlSubpages = new URL(request.url).searchParams.get('subpages') === 'true';
+		const crawlSubpages = new URL(request.url).searchParams.get('crawlSubpages') === 'true';
 		const contentType = request.headers.get('content-type') === 'application/json' ? 'json' : 'text';
 		const token = request.headers.get('Authorization')?.replace('Bearer ', '');
 
@@ -119,7 +119,7 @@ export class Browser {
 
 		const uniqueLinks = Array.from(new Set(links)).splice(0, 10);
 		const md = await this.getWebsiteMarkdown({
-			urls: uniqueLinks,
+			urls: uniqueLinks as string[],
 			enableDetailedResponse,
 			classThis: this,
 			env: this.env,
@@ -153,12 +153,12 @@ export class Browser {
 		}
 	}
 
-	async extractLinks(page: PuppeteerPage, baseUrl: string) {
-		return await page.evaluate((baseUrl: string) => {
+	async extractLinks(page: Page, baseUrl: string) {
+		return await page.evaluate((baseUrl) => {
 			return Array.from(document.querySelectorAll('a'))
 				.map((link) => (link as { href: string }).href)
 				.filter((link) => link.startsWith(baseUrl));
-		}, baseUrl) as string[];
+		}, baseUrl);
 	}
 
 	async getTweet(tweetID: string) {
@@ -203,10 +203,10 @@ export class Browser {
 
 		return await Promise.all(
 			urls.map(async (url) => {
-				const ip = this.request?.headers.get('cf-connecting-ip') || '';
+				const ip = this.request?.headers.get('cf-connecting-ip');
 
 				if (this.token !== env.BACKEND_SECURITY_TOKEN) {
-					const { success } = await env.RATELIMITER.limit({ key: ip });
+					const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
 					if (!success) {
 						return { url, md: 'Rate limit exceeded' };
@@ -244,29 +244,20 @@ export class Browser {
 				let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
 
 				if (this.llmFilter && !cached) {
-					// for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip });
-					const { success: llmLimitSuccess } = await env.LLM_FILTER_RATE_LIMITER.limit({ key: ip });
+					for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-					if (llmLimitSuccess) {
-						const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
-							prompt: 
-							`You are an AI assistant that converts webpage content to markdown while 
-							filtering out unnecessary information. Please follow these guidelines:
-							Remove any inappropriate content, ads, or irrelevant information
-							If unsure about including something, err on the side of keeping it
-							Answer in English. Include all points in markdown in sufficient detail to be useful.
-							Aim for clean, readable markdown.
-							Return the markdown and nothing else.
-							Input: ${md}
-							Output:\`\`\`markdown\n`,
-						})) as { response: string };
+					const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
+						prompt: `You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. Please follow these guidelines:
+Remove any inappropriate content, ads, or irrelevant information
+If unsure about including something, err on the side of keeping it
+Answer in English. Include all points in markdown in sufficient detail to be useful.
+Aim for clean, readable markdown.
+Return the markdown and nothing else.
+Input: ${md}
+Output:\`\`\`markdown\n`,
+					})) as { response: string };
 
-						md = answer.response;
-					} else {
-						// Optional: Log that the LLM rate limit was hit for this IP
-						console.log(`LLM Rate limit hit for IP: ${ip} and URL: ${url}`);
-						// Keep the original 'md' if the LLM limit was exceeded
-					}
+					md = answer.response;
 				}
 
 				await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
@@ -278,52 +269,30 @@ export class Browser {
 	async fetchAndProcessPage(url: string, enableDetailedResponse: boolean): Promise<string> {
 		const page = await this.browser!.newPage();
 		await page.goto(url, { waitUntil: 'networkidle0' });
-		const md = await page.evaluate((enableDetailedResponse: boolean) => {
-			function extractArticleMarkdown() {
-				const readabilityScript = document.createElement('script');
-				readabilityScript.src = 'https://unpkg.com/@mozilla/readability/Readability.js';
-				document.head.appendChild(readabilityScript);
+		
+		// Add the required scripts
+		await page.addScriptTag({ url: 'https://unpkg.com/@mozilla/readability/Readability.js' });
+		await page.addScriptTag({ url: 'https://unpkg.com/turndown/dist/turndown.js' });
 
-				const turndownScript = document.createElement('script');
-				turndownScript.src = 'https://unpkg.com/turndown/dist/turndown.js';
-				document.head.appendChild(turndownScript);
+		const md = await page.evaluate((detailed) => {
+			const reader = new (globalThis as any).Readability(document.cloneNode(true), {
+				charThreshold: 0,
+				keepClasses: true,
+				nbTopCandidates: 500,
+			});
 
-				let md = 'no content';
+			const article = reader.parse();
+			const turndownService = new (globalThis as any).TurndownService();
 
-				// Wait for the libraries to load
-				md = Promise.all([
-					new Promise((resolve) => (readabilityScript.onload = resolve)),
-					new Promise((resolve) => (turndownScript.onload = resolve)),
-				]).then(() => {
-					// Readability instance with the current document
-					const reader = new Readability(document.cloneNode(true), {
-						charThreshold: 0,
-						keepClasses: true,
-						nbTopCandidates: 500,
-					});
-
-					// Parse the article content
-					const article = reader.parse();
-
-					// Turndown instance to convert HTML to Markdown
-					const turndownService = new TurndownService();
-
-					let documentWithoutScripts = document.cloneNode(true) as ClonedDocument;
-					documentWithoutScripts.querySelectorAll('script').forEach((browserItem: any) => browserItem.remove());
-					documentWithoutScripts.querySelectorAll('style').forEach((browserItem: any) => browserItem.remove());
-					documentWithoutScripts.querySelectorAll('iframe').forEach((browserItem: any) => browserItem.remove());
-					documentWithoutScripts.querySelectorAll('noscript').forEach((browserItem: any) => browserItem.remove());
-
-					// article content to Markdown
-					const markdown = turndownService.turndown(enableDetailedResponse ? documentWithoutScripts : article.content);
-
-					return markdown;
-				}) as unknown as string;
-
-				return md;
+			if (detailed) {
+				const doc = document.cloneNode(true) as HTMLDocument;
+				doc.querySelectorAll('script,style,iframe,noscript').forEach((el: Element) => el.remove());
+				return turndownService.turndown(doc);
 			}
-			return extractArticleMarkdown();
+			
+			return turndownService.turndown(article.content);
 		}, enableDetailedResponse);
+
 		await page.close();
 		return md;
 	}
