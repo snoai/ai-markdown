@@ -335,22 +335,16 @@ export class Browser {
 									const profileContent = await page.evaluate((username) => {
 										const tweets = Array.from(document.querySelectorAll('article')).map(tweet => {
 											const rawText = tweet.innerText;
-											// Log any potentially problematic characters
-											const hasSpecialChars = /[^\x00-\x7F]/g.test(rawText);
-											if (hasSpecialChars) {
-												console.log('Found UTF-8 characters in tweet:', 
-													rawText.match(/[^\x00-\x7F]/g)?.join(' '));
-											}
 											
 											// Get only the tweet text without engagement numbers and clean up encoding
 											const tweetText = rawText
 												.split(/\d+K|\d+M/)[0]
-												.replace(/\u00A0/g, ' ')  // Replace non-breaking space
-												.replace(/[\u0080-\u00ff]/g, c => encodeURIComponent(c).replace(/%/g, '\\x'))  // Handle extended ASCII
-												.replace(/[""]/g, '"')    // Replace smart quotes
-												.replace(/['']/g, "'")    // Replace smart apostrophes
-												.replace(/\s*·\s*/g, ' - ')  // Replace bullet with dash
-												.replace(/\s+/g, ' ')    // Normalize whitespace
+												.replace(/\u00A0/g, ' ')    // Replace non-breaking space
+												.replace(/[·•]/g, '-')      // Replace any kind of dots/bullets with simple dash
+												.replace(/\s*-\s*/g, ' - ') // Normalize spacing around dash
+												.replace(/[""]/g, '"')      // Replace smart quotes
+												.replace(/['']/g, "'")      // Replace smart apostrophes
+												.replace(/\s+/g, ' ')       // Normalize whitespace
 												.trim();
 											return tweetText;
 										}).filter(text => text.length > 0).slice(0, 10);
