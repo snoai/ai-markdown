@@ -1,0 +1,36 @@
+name = "url2md"
+main = "src/index.ts"
+compatibility_date = "2023-09-04"
+compatibility_flags = [ "nodejs_compat"]
+
+
+# Browser Rendering API binding
+browser = { binding = "MYBROWSER" }
+
+[[durable_objects.bindings]]
+name = "BROWSER"
+class_name = "Browser"
+
+[[migrations]]
+tag = "v1" # Should be unique for each entry
+new_classes = ["Browser"] # Array of new classes
+
+[[kv_namespaces]]
+binding= "MD_CACHE"
+id = "d8976411926248238493989e7ac09dd9"
+preview_id = "c92ff41b8f074a7ab5f7aa3bb711a38d" 
+
+[[unsafe.bindings]]
+name = "RATELIMITER"
+type = "ratelimit"
+namespace_id = "1001"
+simple = { limit = 10, period = 60 } # 10 requests per 60 seconds
+
+[[unsafe.bindings]]
+name = "LLM_FILTER_RATE_LIMITER" # New distinct name
+type = "ratelimit"
+namespace_id = "1002"          # New unique ID (must be different from the other one)
+simple = { limit = 1, period = 60 } # 1 request per 60 seconds
+
+[ai]
+binding = "AI"
