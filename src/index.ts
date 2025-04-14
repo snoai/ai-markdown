@@ -342,10 +342,11 @@ export class Browser {
 			const isBrowserActive = await this.ensureBrowser();
 
 			if (!isBrowserActive) {
-				return [{ url: urls[0], md: 'Could not start browser instance', error: true }];
+				return [{ url: urls[0], md: '[Browser] Could not start browser instance', error: true }];
 			}
 
-			return await Promise.all(
+			return await Promise.all( // Process all URLs in parallel
+
 				urls.map(async (url) => {
 					try {
 						const ip = this.request?.headers.get('cf-connecting-ip');
@@ -363,9 +364,23 @@ export class Browser {
 
 						// Special YouTube handling
 						if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
+							// Extract YouTube video ID
+							let videoId = '';
+							if (url.includes('youtube.com/watch')) {
+								const urlObj = new URL(url);
+								videoId = urlObj.searchParams.get('v') || '';
+							} else if (url.includes('youtu.be/')) {
+								videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
+							}
+
+							if (!videoId) return { url, md: 'Invalid YouTube URL', error: true };
+
+							const cacheKey = `Youtube:${videoId}`;
+							const cached = await env.MD_CACHE.get(cacheKey);
+
 							if (cached) return { url, md: cached };
 							const md = await this.getYouTubeMetadata(url);
-							await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
+							await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
 							return { url, md };
 						}
 
