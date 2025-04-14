@@ -26,11 +26,5 @@ type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 } # 10 requests per 60 seconds
 
-[[unsafe.bindings]]
-name = "LLM_FILTER_RATE_LIMITER" # New distinct name
-type = "ratelimit"
-namespace_id = "1002"          # New unique ID (must be different from the other one)
-simple = { limit = 1, period = 60 } # 1 request per 60 seconds
-
 [ai]
 binding = "AI"

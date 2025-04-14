@@ -6,19 +6,33 @@ import { html } from './response';
 
 export default {
 	async fetch(request: Request, env: Env) {
-		const ip = request.headers.get('cf-connecting-ip');
-		if (!(env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', ''))) {
-			const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
+		try {
+			const ip = request.headers.get('cf-connecting-ip');
+			if (!(env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', ''))) {
+				const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-			if (!success || request.url.includes('poemanalysis')) {
-				return new Response('Rate limit exceeded', { status: 429 });
+				if (!success || request.url.includes('poemanalysis')) {
+					return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
+						status: 429,
+						headers: { 'Content-Type': 'application/json' }
+					});
+				}
 			}
-		}
 
-		const id = env.BROWSER.idFromName('browser');
-		const obj = env.BROWSER.get(id);
-		const resp = await obj.fetch(request.url, { headers: request.headers });
-		return resp;
+			const id = env.BROWSER.idFromName('browser');
+			const obj = env.BROWSER.get(id);
+			const resp = await obj.fetch(request.url, { headers: request.headers });
+			return resp;
+		} catch (error) {
+			console.error('Error in main fetch handler:', error);
+			return new Response(JSON.stringify({ 
+				error: 'Server error',
+				message: error instanceof Error ? error.message : String(error)
+			}), { 
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		}
 	},
 };
 
@@ -45,41 +59,64 @@ export class Browser {
 	}
 
 	async fetch(request: Request) {
-		this.request = request;
+		try {
+			this.request = request;
 
-		if (!(request.method === 'GET')) {
-			return new Response('Method Not Allowed', { status: 405 });
+			if (!(request.method === 'GET')) {
+				return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { 
+					status: 405,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			const url = new URL(request.url).searchParams.get('url');
+			const enableDetailedResponse = new URL(request.url).searchParams.get('enableDetailedResponse') === 'true';
+			const crawlSubpages = new URL(request.url).searchParams.get('crawlSubpages') === 'true';
+			const contentType = request.headers.get('content-type') === 'application/json' ? 'json' : 'text';
+			const token = request.headers.get('Authorization')?.replace('Bearer ', '');
+
+			this.token = token ?? '';
+
+			this.llmFilter = new URL(request.url).searchParams.get('llmFilter') === 'true';
+
+			if (contentType === 'text' && crawlSubpages) {
+				return new Response(JSON.stringify({ error: 'Error: Crawl subpages can only be enabled with JSON content type' }), { 
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			if (!url) {
+				return this.buildHelpResponse();
+			}
+
+			if (!this.isValidUrl(url)) {
+				return new Response(JSON.stringify({ error: 'Invalid URL provided, should be a full URL starting with http:// or https://' }), { 
+					status: 400,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			if (!(await this.ensureBrowser())) {
+				return new Response(JSON.stringify({ error: 'Could not start browser instance' }), { 
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+
+			return crawlSubpages
+				? this.crawlSubpages(url, enableDetailedResponse, contentType)
+				: this.processSinglePage(url, enableDetailedResponse, contentType);
+		} catch (error) {
+			console.error('Error in Browser.fetch:', error);
+			return new Response(JSON.stringify({ 
+				error: 'Browser fetch error',
+				message: error instanceof Error ? error.message : String(error)
+			}), { 
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
+			});
 		}
-
-		const url = new URL(request.url).searchParams.get('url');
-		const enableDetailedResponse = new URL(request.url).searchParams.get('enableDetailedResponse') === 'true';
-		const crawlSubpages = new URL(request.url).searchParams.get('crawlSubpages') === 'true';
-		const contentType = request.headers.get('content-type') === 'application/json' ? 'json' : 'text';
-		const token = request.headers.get('Authorization')?.replace('Bearer ', '');
-
-		this.token = token ?? '';
-
-		this.llmFilter = new URL(request.url).searchParams.get('llmFilter') === 'true';
-
-		if (contentType === 'text' && crawlSubpages) {
-			return new Response('Error: Crawl subpages can only be enabled with JSON content type', { status: 400 });
-		}
-
-		if (!url) {
-			return this.buildHelpResponse();
-		}
-
-		if (!this.isValidUrl(url)) {
-			return new Response('Invalid URL provided, should be a full URL starting with http:// or https://', { status: 400 });
-		}
-
-		if (!(await this.ensureBrowser())) {
-			return new Response('Could not start browser instance', { status: 500 });
-		}
-
-		return crawlSubpages
-			? this.crawlSubpages(url, enableDetailedResponse, contentType)
-			: this.processSinglePage(url, enableDetailedResponse, contentType);
 	}
 
 	async ensureBrowser() {
@@ -96,11 +133,15 @@ export class Browser {
 						return false;
 					}
 
-					const sessions = await puppeteer.sessions(this.env.MYBROWSER);
+					try {
+						const sessions = await puppeteer.sessions(this.env.MYBROWSER);
 
-					for (const session of sessions) {
-						const b = await puppeteer.connect(this.env.MYBROWSER, session.sessionId);
-						await b.close();
+						for (const session of sessions) {
+							const b = await puppeteer.connect(this.env.MYBROWSER, session.sessionId);
+							await b.close();
+						}
+					} catch (sessionError) {
+						console.error(`Failed to clean up sessions: ${sessionError}`);
 					}
 
 					console.log(`Retrying to start browser instance. Retries left: ${retries}`);
@@ -112,74 +153,125 @@ export class Browser {
 	}
 
 	async crawlSubpages(baseUrl: string, enableDetailedResponse: boolean, contentType: string) {
-		const page = await this.browser!.newPage();
-		await page.goto(baseUrl);
-		const links = await this.extractLinks(page, baseUrl);
-		await page.close();
+		try {
+			const page = await this.browser!.newPage();
+			await page.goto(baseUrl);
+			const links = await this.extractLinks(page, baseUrl);
+			await page.close();
 
-		const uniqueLinks = Array.from(new Set(links)).splice(0, 10);
-		const md = await this.getWebsiteMarkdown({
-			urls: uniqueLinks as string[],
-			enableDetailedResponse,
-			classThis: this,
-			env: this.env,
-		});
+			const uniqueLinks = Array.from(new Set(links)).splice(0, 10);
+			const md = await this.getWebsiteMarkdown({
+				urls: uniqueLinks as string[],
+				enableDetailedResponse,
+				classThis: this,
+				env: this.env,
+			});
 
-		let status = 200;
-		if (md.some((item) => item.md === 'Rate limit exceeded')) {
-			status = 429;
-		}
-
-		return new Response(JSON.stringify(md), { status: status });
-	}
-
-	async processSinglePage(url: string, enableDetailedResponse: boolean, contentType: string) {
-		const md = await this.getWebsiteMarkdown({
-			urls: [url],
-			enableDetailedResponse,
-			classThis: this,
-			env: this.env,
-		});
-		if (contentType === 'json') {
 			let status = 200;
 			if (md.some((item) => item.md === 'Rate limit exceeded')) {
 				status = 429;
 			}
-			return new Response(JSON.stringify(md), { status: status });
-		} else {
-			return new Response(md[0].md, {
-				status: md[0].md === 'Rate limit exceeded' ? 429 : 200,
+
+			return new Response(JSON.stringify(md), { 
+				status: status,
+				headers: { 'Content-Type': 'application/json' }
+			});
+		} catch (error) {
+			console.error('Error in crawlSubpages:', error);
+			return new Response(JSON.stringify({ 
+				error: 'Failed to crawl subpages',
+				message: error instanceof Error ? error.message : String(error),
+				url: baseUrl
+			}), { 
+				status: 500,
+				headers: { 'Content-Type': 'application/json' }
 			});
 		}
 	}
 
+	async processSinglePage(url: string, enableDetailedResponse: boolean, contentType: string) {
+		try {
+			const md = await this.getWebsiteMarkdown({
+				urls: [url],
+				enableDetailedResponse,
+				classThis: this,
+				env: this.env,
+			});
+			
+			if (contentType === 'json') {
+				let status = 200;
+				if (md.some((item) => item.md === 'Rate limit exceeded')) {
+					status = 429;
+				}
+				return new Response(JSON.stringify(md), { 
+					status: status,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} else {
+				return new Response(md[0].md, {
+					status: md[0].md === 'Rate limit exceeded' ? 429 : 200,
+					headers: { 'Content-Type': 'text/plain' }
+				});
+			}
+		} catch (error) {
+			console.error('Error in processSinglePage:', error);
+			const errorResponse = {
+				error: 'Failed to process page',
+				message: error instanceof Error ? error.message : String(error),
+				url: url
+			};
+			
+			if (contentType === 'json') {
+				return new Response(JSON.stringify([errorResponse]), { 
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} else {
+				return new Response(JSON.stringify(errorResponse), { 
+					status: 500,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			}
+		}
+	}
+
 	async extractLinks(page: Page, baseUrl: string) {
-		return await page.evaluate((baseUrl) => {
-			return Array.from(document.querySelectorAll('a'))
-				.map((link) => (link as { href: string }).href)
-				.filter((link) => link.startsWith(baseUrl));
-		}, baseUrl);
+		try {
+			return await page.evaluate((baseUrl) => {
+				return Array.from(document.querySelectorAll('a'))
+					.map((link) => (link as { href: string }).href)
+					.filter((link) => link.startsWith(baseUrl));
+			}, baseUrl);
+		} catch (error) {
+			console.error('Error extracting links:', error);
+			return [];
+		}
 	}
 
 	async getTweet(tweetID: string) {
-		const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetID}&lang=en&features=tfw_timeline_list%3A%3Btfw_follower_count_sunset%3Atrue%3Btfw_tweet_edit_backend%3Aon%3Btfw_refsrc_session%3Aon%3Btfw_fosnr_soft_interventions_enabled%3Aon%3Btfw_show_birdwatch_pivots_enabled%3Aon%3Btfw_show_business_verified_badge%3Aon%3Btfw_duplicate_scribes_to_settings%3Aon%3Btfw_use_profile_image_shape_enabled%3Aon%3Btfw_show_blue_verified_badge%3Aon%3Btfw_legacy_timeline_sunset%3Atrue%3Btfw_show_gov_verified_badge%3Aon%3Btfw_show_business_affiliate_badge%3Aon%3Btfw_tweet_edit_frontend%3Aon&token=4c2mmul6mnh`;
+		try {
+			const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetID}&lang=en&features=tfw_timeline_list%3A%3Btfw_follower_count_sunset%3Atrue%3Btfw_tweet_edit_backend%3Aon%3Btfw_refsrc_session%3Aon%3Btfw_fosnr_soft_interventions_enabled%3Aon%3Btfw_show_birdwatch_pivots_enabled%3Aon%3Btfw_show_business_verified_badge%3Aon%3Btfw_duplicate_scribes_to_settings%3Aon%3Btfw_use_profile_image_shape_enabled%3Aon%3Btfw_show_blue_verified_badge%3Aon%3Btfw_legacy_timeline_sunset%3Atrue%3Btfw_show_gov_verified_badge%3Aon%3Btfw_show_business_affiliate_badge%3Aon%3Btfw_tweet_edit_frontend%3Aon&token=4c2mmul6mnh`;
 
-		const resp = await fetch(url, {
-			headers: {
-				'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-				Accept: 'application/json',
-				'Accept-Language': 'en-US,en;q=0.5',
-				'Accept-Encoding': 'gzip, deflate, br',
-				Connection: 'keep-alive',
-				'Upgrade-Insecure-Requests': '1',
-				'Cache-Control': 'max-age=0',
-				TE: 'Trailers',
-			},
-		});
-		console.log(resp.status);
-		const data = (await resp.json()) as Tweet;
+			const resp = await fetch(url, {
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
+					Accept: 'application/json',
+					'Accept-Language': 'en-US,en;q=0.5',
+					'Accept-Encoding': 'gzip, deflate, br',
+					Connection: 'keep-alive',
+					'Upgrade-Insecure-Requests': '1',
+					'Cache-Control': 'max-age=0',
+					TE: 'Trailers',
+				},
+			});
+			console.log(resp.status);
+			const data = (await resp.json()) as Tweet;
 
-		return data;
+			return data;
+		} catch (error) {
+			console.error('Error fetching tweet:', error);
+			return null;
+		}
 	}
 
 	async getWebsiteMarkdown({
@@ -195,59 +287,61 @@ export class Browser {
 	}) {
 		classThis.keptAliveInSeconds = 0;
 
-		const isBrowserActive = await this.ensureBrowser();
+		try {
+			const isBrowserActive = await this.ensureBrowser();
 
-		if (!isBrowserActive) {
-			return [{ url: urls[0], md: 'Could not start browser instance' }];
-		}
+			if (!isBrowserActive) {
+				return [{ url: urls[0], md: 'Could not start browser instance', error: true }];
+			}
 
-		return await Promise.all(
-			urls.map(async (url) => {
-				const ip = this.request?.headers.get('cf-connecting-ip');
+			return await Promise.all(
+				urls.map(async (url) => {
+					try {
+						const ip = this.request?.headers.get('cf-connecting-ip');
 
-				if (this.token !== env.BACKEND_SECURITY_TOKEN) {
-					const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
+						if (this.token !== env.BACKEND_SECURITY_TOKEN) {
+							const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-					if (!success) {
-						return { url, md: 'Rate limit exceeded' };
-					}
-				}
+							if (!success) {
+								return { url, md: 'Rate limit exceeded', error: true };
+							}
+						}
 
-				const id = url + (enableDetailedResponse ? '-detailed' : '') + (this.llmFilter ? '-llm' : '');
-				const cached = await env.MD_CACHE.get(id);
+						const id = url + (enableDetailedResponse ? '-detailed' : '') + (this.llmFilter ? '-llm' : '');
+						const cached = await env.MD_CACHE.get(id);
 
-				// Special twitter handling
-				if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
-					const tweetID = url.split('/').pop();
-					if (!tweetID) return { url, md: 'Invalid tweet URL' };
+						// Special twitter handling
+						if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
+							const tweetID = url.split('/').pop();
+							if (!tweetID) return { url, md: 'Invalid tweet URL', error: true };
 
-					const cacheFind = await env.MD_CACHE.get(tweetID);
-					if (cacheFind) return { url, md: cacheFind };
+							const cacheFind = await env.MD_CACHE.get(tweetID);
+							if (cacheFind) return { url, md: cacheFind };
 
-					console.log(tweetID);
-					const tweet = await this.getTweet(tweetID);
+							console.log(tweetID);
+							const tweet = await this.getTweet(tweetID);
 
-					if (!tweet || typeof tweet !== 'object' || tweet.text === undefined) return { url, md: 'Tweet not found' };
+							if (!tweet || typeof tweet !== 'object' || tweet.text === undefined) return { url, md: 'Tweet not found', error: true };
 
-					const tweetMd = `Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
+							const tweetMd = `Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
 
-					${tweet.text}
-					Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
-					Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
+							${tweet.text}
+							Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
+							Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
 
-					raw: ${JSON.stringify(tweet)}`;
-					await env.MD_CACHE.put(tweetID, tweetMd);
+							raw: ${JSON.stringify(tweet)}`;
+							await env.MD_CACHE.put(tweetID, tweetMd);
 
-					return { url, md: tweetMd };
-				}
+							return { url, md: tweetMd };
+						}
 
-				let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
+						let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
 
-				if (this.llmFilter && !cached) {
-					for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
+						if (this.llmFilter && !cached) {
+							for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-					const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
-						prompt: `You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. Please follow these guidelines:
+							const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
+								prompt: `You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. Please follow these guidelines:
 Remove any inappropriate content, ads, or irrelevant information
 If unsure about including something, err on the side of keeping it
 Answer in English. Include all points in markdown in sufficient detail to be useful.
@@ -255,46 +349,93 @@ Aim for clean, readable markdown.
 Return the markdown and nothing else.
 Input: ${md}
 Output:\`\`\`markdown\n`,
-					})) as { response: string };
+							})) as { response: string };
 
-					md = answer.response;
-				}
+							md = answer.response;
+						}
 
-				await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
-				return { url, md };
-			}),
-		);
+						await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
+						return { url, md };
+					} catch (error) {
+						console.error(`Error processing URL ${url}:`, error);
+						return { 
+							url, 
+							md: 'Failed to process page', 
+							error: true,
+							errorDetails: error instanceof Error ? error.message : String(error)
+						};
+					}
+				}),
+			);
+		} catch (error) {
+			console.error('Error in getWebsiteMarkdown:', error);
+			return [{ 
+				url: urls[0], 
+				md: 'Failed to get website markdown', 
+				error: true,
+				errorDetails: error instanceof Error ? error.message : String(error)
+			}];
+		}
 	}
 
 	async fetchAndProcessPage(url: string, enableDetailedResponse: boolean): Promise<string> {
-		const page = await this.browser!.newPage();
-		await page.goto(url, { waitUntil: 'networkidle0' });
-		
-		// Add the required scripts
-		await page.addScriptTag({ url: 'https://unpkg.com/@mozilla/readability/Readability.js' });
-		await page.addScriptTag({ url: 'https://unpkg.com/turndown/dist/turndown.js' });
-
-		const md = await page.evaluate((detailed) => {
-			const reader = new (globalThis as any).Readability(document.cloneNode(true), {
-				charThreshold: 0,
-				keepClasses: true,
-				nbTopCandidates: 500,
-			});
-
-			const article = reader.parse();
-			const turndownService = new (globalThis as any).TurndownService();
-
-			if (detailed) {
-				const doc = document.cloneNode(true) as HTMLDocument;
-				doc.querySelectorAll('script,style,iframe,noscript').forEach((el: Element) => el.remove());
-				return turndownService.turndown(doc);
-			}
+		let page = null;
+		try {
+			page = await this.browser!.newPage();
+			await page.goto(url, { waitUntil: 'networkidle0' });
 			
-			return turndownService.turndown(article.content);
-		}, enableDetailedResponse);
+			// Add the required scripts with error handling
+			try {
+				await page.addScriptTag({ url: 'https://unpkg.com/@mozilla/readability/Readability.js' });
+				await page.addScriptTag({ url: 'https://unpkg.com/turndown/dist/turndown.js' });
+			} catch (scriptError) {
+				console.error('Error adding script tags:', scriptError);
+				// If scripts fail to load, return a simple HTML extraction
+				return await page.evaluate(() => {
+					const mainContent = document.body.innerText;
+					return `## ${document.title || 'Untitled Page'}\n\n${mainContent.slice(0, 10000)}`;
+				});
+			}
 
-		await page.close();
-		return md;
+			const md = await page.evaluate((detailed) => {
+				try {
+					const reader = new (globalThis as any).Readability(document.cloneNode(true), {
+						charThreshold: 0,
+						keepClasses: true,
+						nbTopCandidates: 500,
+					});
+
+					const article = reader.parse();
+					const turndownService = new (globalThis as any).TurndownService();
+
+					if (detailed) {
+						const doc = document.cloneNode(true) as HTMLDocument;
+						doc.querySelectorAll('script,style,iframe,noscript').forEach((el: Element) => el.remove());
+						return turndownService.turndown(doc);
+					}
+					
+					return turndownService.turndown(article.content);
+				} catch (evalError) {
+					// If Readability/TurndownService fails, return a simple extraction
+					const title = document.title || 'Untitled Page';
+					const content = document.body.innerText;
+					return `## ${title}\n\n${content.slice(0, 10000)}`;
+				}
+			}, enableDetailedResponse);
+
+			return md;
+		} catch (error) {
+			console.error('Error in fetchAndProcessPage:', error);
+			return `Failed to process page: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			if (page) {
+				try {
+					await page.close();
+				} catch (closeError) {
+					console.error('Error closing page:', closeError);
+				}
+			}
+		}
 	}
 
 	buildHelpResponse() {
@@ -308,14 +449,18 @@ Output:\`\`\`markdown\n`,
 	}
 
 	async alarm() {
-		this.keptAliveInSeconds += 10;
-		if (this.keptAliveInSeconds < KEEP_BROWSER_ALIVE_IN_SECONDS) {
-			await this.storage.setAlarm(Date.now() + TEN_SECONDS);
-		} else {
-			if (this.browser) {
-				await this.browser.close();
-				this.browser = undefined;
+		try {
+			this.keptAliveInSeconds += 10;
+			if (this.keptAliveInSeconds < KEEP_BROWSER_ALIVE_IN_SECONDS) {
+				await this.storage.setAlarm(Date.now() + TEN_SECONDS);
+			} else {
+				if (this.browser) {
+					await this.browser.close();
+					this.browser = undefined;
+				}
 			}
+		} catch (error) {
+			console.error('Error in alarm handler:', error);
 		}
 	}
 }
