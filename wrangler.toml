@@ -26,5 +26,6 @@ type = "ratelimit"
 namespace_id = "1001"
 simple = { limit = 10, period = 60 } # 10 requests per 60 seconds
 
+
 [ai]
 binding = "AI"

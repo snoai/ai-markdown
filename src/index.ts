@@ -11,7 +11,7 @@ export default {
 			if (!(env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', ''))) {
 				const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
-				if (!success || request.url.includes('poemanalysis')) {
+				if (!success) {
 					return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
 						status: 429,
 						headers: { 'Content-Type': 'application/json' }
@@ -127,7 +127,7 @@ export class Browser {
 					this.browser = await puppeteer.launch(this.env.MYBROWSER);
 					return true;
 				} catch (e) {
-					console.error(`Browser DO: Could not start browser instance. Error: ${e}`);
+					console.error(`[Browser] Could not start browser instance. Error: ${e}`);
 					retries--;
 					if (!retries) {
 						return false;
@@ -338,17 +338,20 @@ export class Browser {
 						let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
 
 						if (this.llmFilter && !cached) {
-							for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
+							// for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 
 							const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
-								prompt: `You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. Please follow these guidelines:
-Remove any inappropriate content, ads, or irrelevant information
-If unsure about including something, err on the side of keeping it
-Answer in English. Include all points in markdown in sufficient detail to be useful.
-Aim for clean, readable markdown.
-Return the markdown and nothing else.
-Input: ${md}
-Output:\`\`\`markdown\n`,
+								prompt: 
+								`You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. 
+								Please follow these guidelines:
+									Remove any inappropriate content, ads, or irrelevant information
+									If unsure about including something, err on the side of keeping it
+									Answer in English. Include all points in markdown in sufficient detail to be useful.
+									Aim for clean, readable markdown.
+									Return the markdown and nothing else.
+									Do not include any other text or formatting.
+									Input: ${md}
+									Output:\`\`\`markdown\n`,
 							})) as { response: string };
 
 							md = answer.response;
@@ -356,10 +359,12 @@ Output:\`\`\`markdown\n`,
 
 						await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
 						return { url, md };
+
 					} catch (error) {
 						console.error(`Error processing URL ${url}:`, error);
 						return { 
 							url, 
+							status: 500,
 							md: 'Failed to process page', 
 							error: true,
 							errorDetails: error instanceof Error ? error.message : String(error)
@@ -372,6 +377,7 @@ Output:\`\`\`markdown\n`,
 			return [{ 
 				url: urls[0], 
 				md: 'Failed to get website markdown', 
+				status: 404,
 				error: true,
 				errorDetails: error instanceof Error ? error.message : String(error)
 			}];
