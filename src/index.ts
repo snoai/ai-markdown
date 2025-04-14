@@ -312,27 +312,99 @@ export class Browser {
 
 						// Special twitter handling
 						if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
-							const tweetID = url.split('/').pop();
-							if (!tweetID) return { url, md: 'Invalid tweet URL', error: true };
+							const urlParts = url.split('/');
+							const lastPart = urlParts.pop();
+							const isProfilePage = urlParts.length <= 3 || (urlParts.length === 4 && lastPart === '');
+							
+							if (isProfilePage) {
+								// Handle profile page
+								const username = urlParts[urlParts.length - 1];
+								const page = await this.browser!.newPage();
+								try {
+									await page.goto(url, { waitUntil: 'networkidle0' });
+									
+									// Wait for tweets to load
+									await page.waitForSelector('article', { timeout: 10000 }).catch(() => console.log('Timeout waiting for articles'));
+									
+									// Scroll down to load more tweets
+									await page.evaluate(() => {
+										window.scrollBy(0, 2000);
+										return new Promise(resolve => setTimeout(resolve, 2000));
+									});
+									
+									const profileContent = await page.evaluate((username) => {
+										const tweets = Array.from(document.querySelectorAll('article')).map(tweet => {
+											const rawText = tweet.innerText;
+											// Log any potentially problematic characters
+											const hasSpecialChars = /[^\x00-\x7F]/g.test(rawText);
+											if (hasSpecialChars) {
+												console.log('Found UTF-8 characters in tweet:', 
+													rawText.match(/[^\x00-\x7F]/g)?.join(' '));
+											}
+											
+											// Get only the tweet text without engagement numbers and clean up encoding
+											const tweetText = rawText
+												.split(/\d+K|\d+M/)[0]
+												.replace(/\u00A0/g, ' ')  // Replace non-breaking space
+												.replace(/[\u0080-\u00ff]/g, c => encodeURIComponent(c).replace(/%/g, '\\x'))  // Handle extended ASCII
+												.replace(/[""]/g, '"')    // Replace smart quotes
+												.replace(/['']/g, "'")    // Replace smart apostrophes
+												.replace(/\s*·\s*/g, ' - ')  // Replace bullet with dash
+												.replace(/\s+/g, ' ')    // Normalize whitespace
+												.trim();
+											return tweetText;
+										}).filter(text => text.length > 0).slice(0, 10);
+										
+										const profileName = document.querySelector('h2')?.textContent?.trim() || username;
+										const bio = document.querySelector('[data-testid="UserDescription"]')?.textContent?.trim() || '';
+										
+										return {
+											profileName,
+											bio,
+											tweets
+										};
+									}, username);
+									
+									const profileMd = `# ${profileContent.profileName} (@${username})
 
-							const cacheFind = await env.MD_CACHE.get(tweetID);
-							if (cacheFind) return { url, md: cacheFind };
+${profileContent.bio}
 
-							console.log(tweetID);
-							const tweet = await this.getTweet(tweetID);
+## Recent Tweets
+${profileContent.tweets.map((tweet, index) => `### Tweet ${index + 1}\n${tweet}`).join('\n\n')}
 
-							if (!tweet || typeof tweet !== 'object' || tweet.text === undefined) return { url, md: 'Tweet not found', error: true };
+Profile URL: ${url}`;
+									
+									return { url, md: profileMd };
+								} catch (error) {
+									console.error(`Error processing profile ${url}:`, error);
+									return { url, md: `Failed to fetch profile: ${error instanceof Error ? error.message : String(error)}`, error: true };
+								} finally {
+									await page.close();
+								}
+							} else {
+								// Handle individual tweet
+								const tweetID = lastPart;
+								if (!tweetID) return { url, md: 'Invalid tweet URL', error: true };
 
-							const tweetMd = `Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
+								const cacheFind = await env.MD_CACHE.get(tweetID);
+								if (cacheFind) return { url, md: cacheFind };
 
-							${tweet.text}
-							Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
-							Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
+								console.log(tweetID);
+								const tweet = await this.getTweet(tweetID);
 
-							raw: ${JSON.stringify(tweet)}`;
-							await env.MD_CACHE.put(tweetID, tweetMd);
+								if (!tweet || typeof tweet !== 'object' || tweet.text === undefined) return { url, md: 'Tweet not found', error: true };
 
-							return { url, md: tweetMd };
+								const tweetMd = `Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
+
+								${tweet.text}
+								Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
+								Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
+
+								raw: ${JSON.stringify(tweet)}`;
+								await env.MD_CACHE.put(tweetID, tweetMd);
+
+								return { url, md: tweetMd };
+							}
 						}
 
 						let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
