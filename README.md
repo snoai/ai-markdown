@@ -20,7 +20,7 @@ url (string) -> The website URL to convert into markdown.
 
 ##### _OPTIONAL PARAMETERS_
 
-`enableDetailedResponse` (boolean: false) -> Toggle for detailed response with full HTML content.
+`htmlDetails` (boolean: false) -> Toggle for detailed response with full HTML content.
 `subpages` (boolean: false) -> Crawl and return markdown for up to 10 sub-pages.
 `llmFilter` (boolean: false) -> Filter out unnecessary information using LLM.
 
