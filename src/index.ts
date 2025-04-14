@@ -274,6 +274,52 @@ export class Browser {
 		}
 	}
 
+	async getYouTubeMetadata(url: string): Promise<string> {
+		let page = null;
+		try {
+			page = await this.browser!.newPage();
+			await page.goto(url, { waitUntil: 'networkidle0' });
+			
+			const metadata = await page.evaluate(() => {
+				const title = document.querySelector('h1.ytd-video-primary-info-renderer')?.textContent?.trim();
+				const author = document.querySelector('ytd-video-owner-renderer #channel-name a')?.textContent?.trim();
+				const description = document.querySelector('ytd-expander#description ytd-formatted-string')?.textContent?.trim();
+				const viewCount = document.querySelector('ytd-video-view-count-renderer .view-count')?.textContent?.trim();
+				const uploadDate = document.querySelector('ytd-video-primary-info-renderer .date')?.textContent?.trim();
+				const likeCount = document.querySelector('ytd-menu-renderer ytd-toggle-button-renderer:first-child #text')?.textContent?.trim();
+				
+				return {
+					title,
+					author,
+					description,
+					viewCount,
+					uploadDate,
+					likeCount
+				};
+			});
+
+			return `# ${metadata.title}
+
+## Video Information
+- **Author**: ${metadata.author}
+- **Views**: ${metadata.viewCount}
+- **Upload Date**: ${metadata.uploadDate}
+- **Likes**: ${metadata.likeCount}
+
+## Description
+${metadata.description}
+
+Video URL: ${url}`;
+		} catch (error) {
+			console.error('Error extracting YouTube metadata:', error);
+			return `Failed to extract YouTube metadata: ${error instanceof Error ? error.message : String(error)}`;
+		} finally {
+			if (page) {
+				await page.close();
+			}
+		}
+	}
+
 	async getWebsiteMarkdown({
 		urls,
 		enableDetailedResponse,
@@ -309,6 +355,14 @@ export class Browser {
 
 						const id = url + (enableDetailedResponse ? '-detailed' : '') + (this.llmFilter ? '-llm' : '');
 						const cached = await env.MD_CACHE.get(id);
+
+						// Special YouTube handling
+						if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
+							if (cached) return { url, md: cached };
+							const md = await this.getYouTubeMetadata(url);
+							await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
+							return { url, md };
+						}
 
 						// Special twitter handling
 						if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
