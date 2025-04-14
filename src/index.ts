@@ -38,6 +38,10 @@ export default {
 
 const KEEP_BROWSER_ALIVE_IN_SECONDS = 60;
 const TEN_SECONDS = 10000;
+const SIMPLE_CONTENT_MAX_LENGTH = 10000;
+const TWITTER_TIMEOUT = 10000;
+const LOAD_MORE_TWEETS_SCROLL_AMOUNT = 2000;
+const LOAD_MORE_TWEETS_SCROLL_DELAY = 2000;
 
 export class Browser {
 	state: DurableObjectState;
@@ -58,6 +62,7 @@ export class Browser {
 		this.llmFilter = false;
 	}
 
+	// The main fetch handler for the outside GET requests
 	async fetch(request: Request) {
 		try {
 			this.request = request;
@@ -68,10 +73,10 @@ export class Browser {
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
-
+			// Get the parameters from the URL
 			const url = new URL(request.url).searchParams.get('url');
-			const enableDetailedResponse = new URL(request.url).searchParams.get('enableDetailedResponse') === 'true';
-			const crawlSubpages = new URL(request.url).searchParams.get('crawlSubpages') === 'true';
+			const htmlDetails = new URL(request.url).searchParams.get('htmlDetails') === 'true';
+			const crawlSubpages = new URL(request.url).searchParams.get('subpages') === 'true';
 			const contentType = request.headers.get('content-type') === 'application/json' ? 'json' : 'text';
 			const token = request.headers.get('Authorization')?.replace('Bearer ', '');
 
@@ -79,6 +84,7 @@ export class Browser {
 
 			this.llmFilter = new URL(request.url).searchParams.get('llmFilter') === 'true';
 
+			// TODO: See if we need to change this feature
 			if (contentType === 'text' && crawlSubpages) {
 				return new Response(JSON.stringify({ error: 'Error: Crawl subpages can only be enabled with JSON content type' }), { 
 					status: 400,
@@ -105,8 +111,8 @@ export class Browser {
 			}
 
 			return crawlSubpages
-				? this.crawlSubpages(url, enableDetailedResponse, contentType)
-				: this.processSinglePage(url, enableDetailedResponse, contentType);
+				? this.crawlSubpages(url, htmlDetails, contentType)
+				: this.processSinglePage(url, htmlDetails, contentType);
 		} catch (error) {
 			console.error('Error in Browser.fetch:', error);
 			return new Response(JSON.stringify({ 
@@ -299,17 +305,16 @@ export class Browser {
 			});
 
 			return `# ${metadata.title}
+						## Video Information
+						- **Author**: ${metadata.author}
+						- **Views**: ${metadata.viewCount}
+						- **Upload Date**: ${metadata.uploadDate}
+						- **Likes**: ${metadata.likeCount}
 
-## Video Information
-- **Author**: ${metadata.author}
-- **Views**: ${metadata.viewCount}
-- **Upload Date**: ${metadata.uploadDate}
-- **Likes**: ${metadata.likeCount}
+						## Description
+						${metadata.description}
 
-## Description
-${metadata.description}
-
-Video URL: ${url}`;
+						Video URL: ${url}`;
 		} catch (error) {
 			console.error('Error extracting YouTube metadata:', error);
 			return `Failed to extract YouTube metadata: ${error instanceof Error ? error.message : String(error)}`;
@@ -378,12 +383,12 @@ Video URL: ${url}`;
 									await page.goto(url, { waitUntil: 'networkidle0' });
 									
 									// Wait for tweets to load
-									await page.waitForSelector('article', { timeout: 10000 }).catch(() => console.log('Timeout waiting for articles'));
+									await page.waitForSelector('article', { timeout: TWITTER_TIMEOUT }).catch(() => console.log('Timeout waiting for articles'));
 									
 									// Scroll down to load more tweets
 									await page.evaluate(() => {
-										window.scrollBy(0, 2000);
-										return new Promise(resolve => setTimeout(resolve, 2000));
+										window.scrollBy(0, LOAD_MORE_TWEETS_SCROLL_AMOUNT);
+										return new Promise(resolve => setTimeout(resolve, LOAD_MORE_TWEETS_SCROLL_DELAY));
 									});
 									
 									const profileContent = await page.evaluate((username) => {
@@ -413,14 +418,12 @@ Video URL: ${url}`;
 										};
 									}, username);
 									
-									const profileMd = `# ${profileContent.profileName} (@${username})
-
-${profileContent.bio}
-
-## Recent Tweets
-${profileContent.tweets.map((tweet, index) => `### Tweet ${index + 1}\n${tweet}`).join('\n\n')}
-
-Profile URL: ${url}`;
+									const profileMd = `
+									# ${profileContent.profileName} (@${username})
+										${profileContent.bio}
+										## Recent Tweets
+										${profileContent.tweets.map((tweet, index) => `### Tweet ${index + 1}\n${tweet}`).join('\n\n')}
+										Profile URL: ${url}`;
 									
 									return { url, md: profileMd };
 								} catch (error) {
@@ -434,7 +437,8 @@ Profile URL: ${url}`;
 								const tweetID = lastPart;
 								if (!tweetID) return { url, md: 'Invalid tweet URL', error: true };
 
-								const cacheFind = await env.MD_CACHE.get(tweetID);
+								const cacheKey = `Twitter:${tweetID}`;
+								const cacheFind = await env.MD_CACHE.get(cacheKey);
 								if (cacheFind) return { url, md: cacheFind };
 
 								console.log(tweetID);
@@ -449,7 +453,7 @@ Profile URL: ${url}`;
 								Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
 
 								raw: ${JSON.stringify(tweet)}`;
-								await env.MD_CACHE.put(tweetID, tweetMd);
+								await env.MD_CACHE.put(cacheKey, tweetMd);
 
 								return { url, md: tweetMd };
 							}
@@ -517,10 +521,15 @@ Profile URL: ${url}`;
 			} catch (scriptError) {
 				console.error('Error adding script tags:', scriptError);
 				// If scripts fail to load, return a simple HTML extraction
-				return await page.evaluate(() => {
-					const mainContent = document.body.innerText;
-					return `## ${document.title || 'Untitled Page'}\n\n${mainContent.slice(0, 10000)}`;
-				});
+				try {
+					return await page.evaluate(() => {
+						const mainContent = document.body.innerText;
+						return `## ${document.title || 'Untitled Page'}\n\n${mainContent.slice(0, 10000)}`;
+					});
+				} catch (evaluateError) {
+					console.error('Error in page evaluation:', evaluateError);
+					return `## Error\n\nFailed to extract content: ${evaluateError instanceof Error ? evaluateError.message : String(evaluateError)}`;
+				}
 			}
 
 			const md = await page.evaluate((detailed) => {
@@ -545,7 +554,7 @@ Profile URL: ${url}`;
 					// If Readability/TurndownService fails, return a simple extraction
 					const title = document.title || 'Untitled Page';
 					const content = document.body.innerText;
-					return `## ${title}\n\n${content.slice(0, 10000)}`;
+					return `## ${title}\n\n${content.slice(0, SIMPLE_CONTENT_MAX_LENGTH)}`;
 				}
 			}, enableDetailedResponse);
 
