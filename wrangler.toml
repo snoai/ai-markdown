@@ -24,7 +24,7 @@ preview_id = "c92ff41b8f074a7ab5f7aa3bb711a38d"
 name = "RATELIMITER"
 type = "ratelimit"
 namespace_id = "1001"
-simple = { limit = 10, period = 60 } # 10 requests per 60 seconds
+simple = { limit = 30, period = 60 } # 10 requests per 60 seconds
 
 
 [ai]
