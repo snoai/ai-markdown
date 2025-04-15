@@ -85,19 +85,31 @@ while IFS= read -r url; do
         continue
     fi
 
-    # General error checks
-    error_check=$(echo "$response" | jq -e '.[0] | (.error == true or (.md | type == "string" and (contains("Failed to") or contains("Rate limit"))))' 2>/dev/null)
+    # Check specifically for Worker's rate limit error
+    worker_rate_limit_check=$(echo "$response" | jq -e '.[0] | (.error == true and .md == "Rate limit exceeded")' 2>/dev/null)
+    wrl_exit_code=$?
+    
+    # Check for other errors (failed fetch, external rate limits, etc.)
+    other_error_check=$(echo "$response" | jq -e '.[0] | (.error == true or (.md | type == "string" and contains("Failed to")))' 2>/dev/null)
     jq_exit_code=$?
 
-    if [ $jq_exit_code -eq 0 ]; then
+    if [ $wrl_exit_code -eq 0 ]; then
+        # Worker rate limit triggered
+        error_message=$(echo "$response" | jq -r '.[0].md // "Unknown error"' 2>/dev/null)
+        echo -e "${RED}Error for URL: $url - Worker Rate Limit Hit${NC}"
+        echo "  Message: $error_message"
+    elif [ $jq_exit_code -eq 0 ]; then
         # jq ran successfully and found an error indicator
         error_message=$(echo "$response" | jq -r '.[0].md // (.[0].errorDetails // "Unknown error")' 2>/dev/null)
-        echo -e "${RED}Error detected for URL: $url${NC}"
+        echo -e "${RED}Error processing URL: $url - Likely External Issue${NC}"
         echo "  Message: $error_message"
     else
         # No errors detected for this general URL
         echo -e "${GREEN}Test OK for URL: $url${NC}"
     fi
+
+    # Pause between requests to avoid hitting the worker rate limit
+    sleep 3
 
 done <<< "$urls"
 
