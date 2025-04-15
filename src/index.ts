@@ -325,6 +325,115 @@ export class Browser {
 		}
 	}
 
+	// Reddit API helpers - simplified to only use public API without OAuth
+	async fetchRedditSubredditMarkdown(url: string, env: Env): Promise<string> {
+		try {
+			// Extract subreddit name from URL
+			const match = url.match(/reddit\.com\/r\/([A-Za-z0-9_-]+)/i);
+			if (!match) {
+				console.error('[Reddit] Invalid URL format:', url);
+				return 'Invalid Reddit URL format';
+			}
+			
+			const subreddit = match[1];
+			console.log('[Reddit] Fetching subreddit:', subreddit);
+			
+			// Use cache first
+			const cacheKey = `Reddit:${subreddit}`;
+			const cached = await env.MD_CACHE.get(cacheKey);
+			if (cached) {
+				console.log('[Reddit] Using cached content for:', subreddit);
+				return cached;
+			}
+			
+			// Create the public API URL
+			const apiUrl = `https://www.reddit.com/r/${subreddit}/hot.json?limit=5`;
+			console.log('[Reddit] Fetching from public API:', apiUrl);
+			
+			// Fetch without authentication
+			const resp = await fetch(apiUrl, {
+				method: 'GET',
+				headers: {
+					'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+					'Accept': 'application/json',
+					'Cache-Control': 'no-cache'
+				}
+			});
+			
+			console.log('[Reddit] Response status:', resp.status);
+			
+			if (!resp.ok) {
+				console.error(`[Reddit] API error: ${resp.status} ${resp.statusText}`);
+				const errorText = await resp.text();
+				console.error('[Reddit] Error details:', errorText);
+				return `Failed to fetch from Reddit API: ${resp.status}`;
+			}
+			
+			const responseText = await resp.text();
+			console.log('[Reddit] API response preview (first 100 chars):', responseText.substring(0, 100));
+			
+			let data;
+			try {
+				data = JSON.parse(responseText);
+			} catch (parseError) {
+				console.error('[Reddit] JSON parse error:', parseError);
+				return 'Error parsing Reddit API response';
+			}
+			
+			const md = this.formatRedditData(data, subreddit, url);
+			
+			// Cache successful responses
+			if (md && md.length > 100) {
+				console.log('[Reddit] Caching response for:', subreddit);
+				await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
+			}
+			
+			return md;
+		} catch (error) {
+			console.error('[Reddit] Error in fetchRedditSubredditMarkdown:', error);
+			return `Error fetching Reddit content: ${error instanceof Error ? error.message : String(error)}`;
+		}
+	}
+	
+	// Helper method to format Reddit data to markdown
+	formatRedditData(data: any, subreddit: string, originalUrl: string): string {
+		if (!data?.data?.children?.length) {
+			return 'No posts found in this subreddit.';
+		}
+		
+		let md = `# Subreddit: r/${subreddit}\n\n`;
+		
+		for (const post of data.data.children) {
+			const p = post.data;
+			if (!p) continue;
+			
+			md += `## ${p.title || 'Untitled post'}\n\n`;
+			md += `- **Author:** u/${p.author || 'unknown'}\n`;
+			md += `- **Score:** ${p.score || 0}\n`;
+			md += `- **Comments:** ${p.num_comments || 0}\n`;
+			md += `- **Posted:** ${new Date(p.created_utc * 1000).toLocaleString()}\n\n`;
+			
+			if (p.selftext) {
+				// Limit text length with ellipsis if too long
+				const maxLength = 500;
+				const text = p.selftext.length > maxLength 
+					? p.selftext.substring(0, maxLength) + '...' 
+					: p.selftext;
+				md += `${text}\n\n`;
+			}
+			
+			if (p.url && !p.url.includes('reddit.com')) {
+				md += `**Link:** [${p.url}](${p.url})\n\n`;
+			}
+			
+			md += `**Reddit link:** [View full post](https://reddit.com${p.permalink})\n\n`;
+			md += `---\n\n`;
+		}
+		
+		md += `\nSource: [${originalUrl}](${originalUrl})`;
+		return md;
+	}
+
 	async getWebsiteMarkdown({
 		urls,
 		enableDetailedResponse,
@@ -472,6 +581,17 @@ export class Browser {
 
 								return { url, md: tweetMd };
 							}
+						}
+
+						// Reddit handling
+						if (url.includes('reddit.com/r/')) {
+							console.log('[Reddit] Detected Reddit URL:', url);
+							
+							// Let the specialized function handle caching
+							const md = await this.fetchRedditSubredditMarkdown(url, env);
+							console.log('[Reddit] Content fetched, length:', md.length);
+							
+							return { url, md };
 						}
 
 						let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
