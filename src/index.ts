@@ -42,7 +42,6 @@ const SIMPLE_CONTENT_MAX_LENGTH = 10000;
 const TWITTER_TIMEOUT = 10000;
 const LOAD_MORE_TWEETS_SCROLL_AMOUNT = 2000;
 const LOAD_MORE_TWEETS_SCROLL_DELAY = 2000;
-
 export class Browser {
 	state: DurableObjectState;
 	env: Env;
@@ -281,47 +280,35 @@ export class Browser {
 	}
 
 	async getYouTubeMetadata(url: string): Promise<string> {
-		let page = null;
+		// Skip browser interaction entirely for YouTube
+		// YouTube's UI changes frequently and is hard to scrape reliably
+		
 		try {
-			page = await this.browser!.newPage();
-			await page.goto(url, { waitUntil: 'networkidle0' });
-			
-			const metadata = await page.evaluate(() => {
-				const title = document.querySelector('h1.ytd-video-primary-info-renderer')?.textContent?.trim();
-				const author = document.querySelector('ytd-video-owner-renderer #channel-name a')?.textContent?.trim();
-				const description = document.querySelector('ytd-expander#description ytd-formatted-string')?.textContent?.trim();
-				const viewCount = document.querySelector('ytd-video-view-count-renderer .view-count')?.textContent?.trim();
-				const uploadDate = document.querySelector('ytd-video-primary-info-renderer .date')?.textContent?.trim();
-				const likeCount = document.querySelector('ytd-menu-renderer ytd-toggle-button-renderer:first-child #text')?.textContent?.trim();
-				
-				return {
-					title,
-					author,
-					description,
-					viewCount,
-					uploadDate,
-					likeCount
-				};
-			});
-
-			return `# ${metadata.title}
-						## Video Information
-						- **Author**: ${metadata.author}
-						- **Views**: ${metadata.viewCount}
-						- **Upload Date**: ${metadata.uploadDate}
-						- **Likes**: ${metadata.likeCount}
-
-						## Description
-						${metadata.description}
-
-						Video URL: ${url}`;
-		} catch (error) {
-			console.error('Error extracting YouTube metadata:', error);
-			return `Failed to extract YouTube metadata: ${error instanceof Error ? error.message : String(error)}`;
-		} finally {
-			if (page) {
-				await page.close();
+			// Extract video ID
+			let videoId = '';
+			if (url.includes('youtube.com/watch')) {
+				const urlObj = new URL(url);
+				videoId = urlObj.searchParams.get('v') || '';
+			} else if (url.includes('youtu.be/')) {
+				videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
 			}
+			
+			if (!videoId) {
+				return `# YouTube Video\n\nCould not extract video ID from: ${url}`;
+			}
+			
+			// Create a simple, reliable response
+			return `# YouTube Video
+
+## Information
+- **Video ID**: ${videoId}
+- **Direct Link**: ${url}
+- **Embed Code**: <iframe width="560" height="315" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+
+To view this video, visit: ${url}`;
+		} catch (error) {
+			console.error('[YouTube] Error:', error);
+			return `# YouTube Video\n\nError processing: ${url}\n\n${error instanceof Error ? error.message : String(error)}`;
 		}
 	}
 
@@ -473,22 +460,14 @@ export class Browser {
 
 						// Special YouTube handling
 						if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
-							// Extract YouTube video ID
-							let videoId = '';
-							if (url.includes('youtube.com/watch')) {
-								const urlObj = new URL(url);
-								videoId = urlObj.searchParams.get('v') || '';
-							} else if (url.includes('youtu.be/')) {
-								videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
-							}
-
-							if (!videoId) return { url, md: 'Invalid YouTube URL', error: true };
-
-							const cacheKey = `Youtube:${videoId}`;
+							const cacheKey = `Youtube:${url}`;
 							const cached = await env.MD_CACHE.get(cacheKey);
 
 							if (cached) return { url, md: cached };
+							
+							// Call our dedicated YouTube handler method
 							const md = await this.getYouTubeMetadata(url);
+							
 							await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
 							return { url, md };
 						}
@@ -509,10 +488,10 @@ export class Browser {
 									// Wait for tweets to load
 									await page.waitForSelector('article', { timeout: TWITTER_TIMEOUT }).catch(() => console.log('Timeout waiting for articles'));
 									
-									// Scroll down to load more tweets
+									// Scroll down to load more tweets - use explicit values to avoid reference errors
 									await page.evaluate(() => {
-										window.scrollBy(0, LOAD_MORE_TWEETS_SCROLL_AMOUNT);
-										return new Promise(resolve => setTimeout(resolve, LOAD_MORE_TWEETS_SCROLL_DELAY));
+										window.scrollBy(0, 2000); // Use fixed value instead of LOAD_MORE_TWEETS_SCROLL_AMOUNT
+										return new Promise(resolve => setTimeout(resolve, 2000)); // Use fixed value instead of LOAD_MORE_TWEETS_SCROLL_DELAY
 									});
 									
 									const profileContent = await page.evaluate((username) => {
