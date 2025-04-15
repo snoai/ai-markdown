@@ -28,4 +28,6 @@ interface ClonedDocument extends Node {
 // Extend the Env interface
 interface Env extends Cloudflare.Env {
   BACKEND_SECURITY_TOKEN: string;
+  REDDIT_CLIENT_ID: string;
+  REDDIT_CLIENT_SECRET: string;
 } 
