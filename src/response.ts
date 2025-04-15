@@ -38,7 +38,7 @@ export const html = `<!--
 							class="flex h-10 w-full text-black rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 flex-1"
 							type="text" placeholder="Enter website URL" />
 						<button type="submit"
-							class="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2">
+							class="inline-flex items-center justify-center whitespace-nowrap rounded-xl text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 hover:shadow-lg transform hover:scale-105 transition-all duration-200 border border-primary/20 h-10 px-4 py-2">
 							Convert to Markdown
 						</button>
 					</form>
@@ -87,21 +87,3 @@ export const html = `<!--
 </html>
 `;
 
-// ==================
-// A fast tool to convert any website into LLM-ready markdown data.
-
-// Usage example:
-// $ curl 'https://md.dhr.wtf/?url=https://example.com'
-
-// [REQUIRED PARAMETERS]
-// url (string)          -> The website URL to convert into markdown.
-
-// [OPTIONAL PARAMETERS]
-// enableDetailedResponse (boolean: false)  -> Toggle for detailed response with full HTML content.
-// subpages         (boolean: false)  -> Crawl and return markdown for up to 10 subpages.
-// llmFilter             (boolean: false)  -> Filter out unnecessary information using LLM.
-
-// [RESPONSE TYPES]
-// Add 'Content-Type: text/plain' in headers for plain text response.
-// Add 'Content-Type: application/json' in headers for JSON response.
-// ================================================================
