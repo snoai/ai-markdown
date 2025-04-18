@@ -1,7 +1,10 @@
 {
 	"name": "url-to-md",
-	"version": "0.8.0",
-	"private": true,
+	"version": "0.9.0",
+	"license": "MIT",
+	"workspaces": [
+		"packages/*"
+	],
 	"scripts": {
 		"publish": "pnpm run cf-typegen && wrangler deploy",
 		"dev": "pnpm run cf-typegen && wrangler dev --remote",
@@ -12,10 +15,10 @@
 		"@types/jsdom": "^21.1.7",
 		"@types/turndown": "^5.0.5",
 		"typescript": "^5.8.3",
-		"wrangler": "^4.10.0"
+		"wrangler": "^4.12.0"
 	},
 	"dependencies": {
-		"@cloudflare/puppeteer": "^1.0.1",
+		"@cloudflare/puppeteer": "^1.0.2",
 		"@types/node": "^20.17.30",
 		"react-tweet": "^3.2.2"
 	}

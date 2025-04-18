@@ -19,9 +19,7 @@ pids
 
 ## Dependency directories
 node_modules/
-jspm_packages/
 web_modules/
-bower_components/
 
 ## Cache directories
 .npm
@@ -92,3 +90,6 @@ coverage/
 .etc/
 .DS_Store
 .yarn-integrity
+
+# VSCode
+.vscode/
