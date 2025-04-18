@@ -1,8 +1,20 @@
 #!/bin/bash
 
-WORKER_URL="https://url2md.sno.ai"
+# Load environment variables from .env.local if it exists
+if [ -f "$(dirname "$0")/../.env.local" ]; then
+  set -a
+  source "$(dirname "$0")/../.env.local"
+  set +a
+fi
+
+if [[ "$*" == *"--prod"* ]]; then
+    echo "Running in testing production mode"
+    WORKER_URL="https://url2md.sno.ai"
+else
+    echo "Running in testing development mode"
+    WORKER_URL="http://localhost:8787"
+fi
 TEST_FILE="tests/common-test.md"
-AUTH_TOKEN="6fY8p2xT$vK9zQ7wL#mN3rD1jH5gS4bE0aF"
 
 # Colors for output
 RED='\033[0;31m'
@@ -51,7 +63,7 @@ while IFS= read -r url; do
     # Make the request to the worker with Authorization header to bypass rate limiting
     response=$(curl -sS -X GET "$WORKER_URL/?$query_params" \
         -H "Content-Type: application/json" \
-        -H "Authorization: Bearer $AUTH_TOKEN")
+        -H "Authorization: Bearer $BACKEND_SECURITY_TOKEN")
     exit_code=$?
 
     if [ $exit_code -ne 0 ]; then

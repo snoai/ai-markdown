@@ -22,8 +22,8 @@ https://www.reddit.com/r/cursor/
 https://www.reddit.com/r/cursor/comments/1jz4rzf/gpt41_now_available_in_cursor/
 
 ## Github
-https://github.com/larryhopecode
-https://github.com/supermemoryai/supermemory
+https://github.com/snoai
+https://github.com/ollama/ollama
 
 
 ## Medium
