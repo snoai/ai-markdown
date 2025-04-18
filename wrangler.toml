@@ -32,6 +32,7 @@ binding = "AI"
 
 # Environment Variables
 [vars]
-BACKEND_SECURITY_TOKEN = "6fY8p2xT$vK9zQ7wL#mN3rD1jH5gS4bE0aF"
-REDDIT_CLIENT_ID = "o6AgmXR1o2WlXY15Wqizzw"
-REDDIT_CLIENT_SECRET = "xaJYs07dFa2dHz-DkV2xq84I8Bn92A"
+# BACKEND_URL = "YOUR_BACKEND_URL" # Replace with your actual backend URL if needed
+# Secrets like BACKEND_SECURITY_TOKEN, OPENAI_API_KEY, REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET
+# should be set using `wrangler secret put <SECRET_NAME>` in your Cloudflare environment.
+# They will be available as environment variables within the worker.
