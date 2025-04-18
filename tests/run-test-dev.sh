@@ -22,17 +22,34 @@ fi
 # Loop through each URL
 while IFS= read -r url; do
     # URL encode the target URL for the query parameter
-    # Simple encoding for common characters, more robust encoding might be needed for complex URLs
     encoded_url=$(printf %s "$url" | jq -s -R -r @uri)
 
-    # Check if it's a YouTube URL for special handling
+    # Check URL patterns for specific handling
     is_youtube=$(echo "$url" | grep -qE 'youtube.com|youtu.be' && echo "true" || echo "false")
+    is_blog=$(echo "$url" | grep -qE 'blog|medium.com|dev.to' && echo "true" || echo "false")
+    is_docs=$(echo "$url" | grep -qE 'docs|documentation|github.com|gitlab.com' && echo "true" || echo "false")
     
-    # Print current URL being tested
-    echo "Testing URL: $url"
+    # Build query parameters based on URL type
+    query_params="url=$encoded_url"
+    
+    # YouTube videos get detailed response for better metadata
+    if [ "$is_youtube" = "true" ]; then
+        query_params="$query_params&enableDetailedResponse=true"
+        echo "Testing YouTube URL with detailed response: $url"
+    # Blog posts get subpages and LLM filtering
+    elif [ "$is_blog" = "true" ]; then
+        query_params="$query_params&subpages=true&llmFilter=true"
+        echo "Testing blog URL with subpages and LLM filtering: $url"
+    # Documentation pages get detailed response and subpages
+    elif [ "$is_docs" = "true" ]; then
+        query_params="$query_params&enableDetailedResponse=true&subpages=true"
+        echo "Testing documentation URL with detailed response and subpages: $url"
+    else
+        echo "Testing URL with default parameters: $url"
+    fi
 
     # Make the request to the worker with Authorization header to bypass rate limiting
-    response=$(curl -sS -X GET "$WORKER_URL/?url=$encoded_url" \
+    response=$(curl -sS -X GET "$WORKER_URL/?$query_params" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $AUTH_TOKEN")
     exit_code=$?
@@ -53,7 +70,7 @@ while IFS= read -r url; do
     # Special handling for YouTube to diagnose issues
     if [ "$is_youtube" = "true" ]; then
         youtube_md=$(echo "$response" | jq -r '.[0].md')
-        echo "YouTube Response:"
+        echo "YouTube Response (with detailed mode):"
         echo "$youtube_md" | head -10
         
         # Flag for YouTube specific errors
@@ -78,7 +95,7 @@ while IFS= read -r url; do
 
         # Report overall YouTube status
         if [ "$youtube_error" = false ]; then
-            echo -e "${GREEN}YouTube extraction OK!${NC}"
+            echo -e "${GREEN}YouTube extraction OK with detailed response!${NC}"
         fi
 
         echo "----------------------------------------"
@@ -105,7 +122,13 @@ while IFS= read -r url; do
         echo "  Message: $error_message"
     else
         # No errors detected for this general URL
-        echo -e "${GREEN}Test OK for URL: $url${NC}"
+        if [ "$is_blog" = "true" ]; then
+            echo -e "${GREEN}Test OK for blog URL: $url (with subpages and LLM filtering)${NC}"
+        elif [ "$is_docs" = "true" ]; then
+            echo -e "${GREEN}Test OK for documentation URL: $url (with detailed response and subpages)${NC}"
+        else
+            echo -e "${GREEN}Test OK for URL: $url${NC}"
+        fi
     fi
 
     # Pause between requests to avoid hitting the worker rate limit
