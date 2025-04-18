@@ -172,3 +172,5 @@ dist
 .wrangler/
 
 .etc/
+
+.DS_Store
