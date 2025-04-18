@@ -1,41 +1,57 @@
 /// <reference lib="dom" />
 import puppeteer from '@cloudflare/puppeteer';
 import type { Browser as PuppeteerBrowser, Page } from '@cloudflare/puppeteer';
-import { Tweet } from 'react-tweet/api';
+
 import { html } from './response';
+import type { Env } from './types';
+import { isValidUrl } from './utils';
+import { 
+	KEEP_BROWSER_ALIVE_IN_SECONDS, 
+	TEN_SECONDS, 
+} from './constants';
+import {
+	getYouTubeMetadata,
+	handleTwitterProfilePage,
+	handleTwitterTweetPage,
+	handleRedditURL,
+	handleDefaultPage
+} from './handlers';
 
-interface Env {
-	BROWSER: DurableObjectNamespace;
-	MYBROWSER: any;
-	MD_CACHE: KVNamespace;
-	RATELIMITER: any;
-	AI: any;
-	BACKEND_SECURITY_TOKEN: string;
-	REDDIT_CLIENT_ID?: string;
-	REDDIT_CLIENT_SECRET?: string;
-}
-
+// Main Cloudflare Worker entry point
 export default {
 	async fetch(request: Request, env: Env) {
+		console.log("\n");
+		console.log("🚀🚀🚀 ---> Worker Fetch Handler Entered <--- 🚀🚀🚀");
 		try {
+			// Rate Limiting (apply before routing to Durable Object)
 			const ip = request.headers.get('cf-connecting-ip');
-			if (!(env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', ''))) {
+			const isAuthorized = env.BACKEND_SECURITY_TOKEN === request.headers.get('Authorization')?.replace('Bearer ', '');
+		
+			if (!isAuthorized) {
+				console.log(`[Worker] Rate limiting check for IP: ${ip ?? 'no-ip'}`);
 				const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
-
 				if (!success) {
+					console.warn(`[Worker] Rate limit exceeded for IP: ${ip ?? 'no-ip'}`);
 					return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
 						status: 429,
 						headers: { 'Content-Type': 'application/json' }
 					});
 				}
+				console.log(`[Worker] Rate limit passed for IP: ${ip ?? 'no-ip'}`);
 			}
 
+			// Route to Durable Object
+			console.log("[Worker] Getting Durable Object ID");
 			const id = env.BROWSER.idFromName('browser');
+			console.log(`[Worker] Durable Object ID: ${id}`);
+			console.log("[Worker] Getting Durable Object instance");
 			const obj = env.BROWSER.get(id);
+			console.log("[Worker] Forwarding request to Durable Object");
 			const resp = await obj.fetch(request.url, { headers: request.headers });
+			console.log("[Worker] Received response from Durable Object");
 			return resp;
 		} catch (error) {
-			console.error('Error in main fetch handler:', error);
+			console.error('[Worker] Error in main fetch handler:', error);
 			return new Response(JSON.stringify({ 
 				error: 'Server error',
 				message: error instanceof Error ? error.message : String(error)
@@ -47,56 +63,61 @@ export default {
 	},
 };
 
-const KEEP_BROWSER_ALIVE_IN_SECONDS = 60;
-const TEN_SECONDS = 10000;
-const SIMPLE_CONTENT_MAX_LENGTH = 10000;
-const TWITTER_TIMEOUT = 10000;
-const LOAD_MORE_TWEETS_SCROLL_AMOUNT = 2000;
-const LOAD_MORE_TWEETS_SCROLL_DELAY = 2000;
+// Durable Object Class
 export class Browser {
 	state: DurableObjectState;
 	env: Env;
 	keptAliveInSeconds: number;
 	storage: DurableObjectStorage;
-	browser: PuppeteerBrowser | undefined;
-	request: Request | undefined;
+	browser?: PuppeteerBrowser; // Made optional as it's initialized later
+	request?: Request; // Made optional
 	llmFilter: boolean;
-	token = '';
+	token: string;
 
 	constructor(state: DurableObjectState, env: Env) {
 		this.state = state;
 		this.env = env;
 		this.keptAliveInSeconds = 0;
-		this.storage = this.state.storage;
+		this.storage = this.state.storage; // Use state.storage directly
 		this.request = undefined;
 		this.llmFilter = false;
+		this.token = '';
+		
+		// Initialize storage within the constructor
+		this.state.blockConcurrencyWhile(async () => {
+            let stored = await this.storage.get<number>("keptAliveInSeconds");
+            this.keptAliveInSeconds = stored || 0;
+        });
 	}
 
-	// The main fetch handler for the outside GET requests
-	async fetch(request: Request) {
-		console.log("\n🚀🚀🚀 ---> DO Fetch Handler Entered <--- 🚀🚀🚀\n");
+	// Main fetch handler for the Durable Object
+	async fetch(request: Request): Promise<Response> {
+		console.log("\n🚀🚀🚀 ---> DO Fetch Handler Entered <--- 🚀🚀🚀");
 		try {
 			this.request = request;
 
-			if (!(request.method === 'GET')) {
+			if (request.method !== 'GET') {
+				console.warn("[DO] Method not allowed:", request.method);
 				return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { 
 					status: 405,
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
-			// Get the parameters from the URL
-			const url = new URL(request.url).searchParams.get('url');
-			const htmlDetails = new URL(request.url).searchParams.get('htmlDetails') === 'true';
-			const crawlSubpages = new URL(request.url).searchParams.get('subpages') === 'true';
+
+			// Parse URL and parameters
+			const urlParams = new URL(request.url).searchParams;
+			const url = urlParams.get('url');
+			const htmlDetails = urlParams.get('htmlDetails') === 'true';
+			const crawlSubpages = urlParams.get('subpages') === 'true';
 			const contentType = request.headers.get('content-type') === 'application/json' ? 'json' : 'text';
-			const token = request.headers.get('Authorization')?.replace('Bearer ', '');
+			this.token = request.headers.get('Authorization')?.replace('Bearer ', '') ?? '';
+			this.llmFilter = urlParams.get('llmFilter') === 'true';
 
-			this.token = token ?? '';
+			console.log(`[DO] Request Params: url=${url}, htmlDetails=${htmlDetails}, crawlSubpages=${crawlSubpages}, contentType=${contentType}, llmFilter=${this.llmFilter}`);
 
-			this.llmFilter = new URL(request.url).searchParams.get('llmFilter') === 'true';
-
-			// TODO: See if we need to change this feature
+			// Input Validation
 			if (contentType === 'text' && crawlSubpages) {
+				console.error("[DO] Invalid parameter combination: text content type with crawl subpages");
 				return new Response(JSON.stringify({ error: 'Error: Crawl subpages can only be enabled with JSON content type' }), { 
 					status: 400,
 					headers: { 'Content-Type': 'application/json' }
@@ -104,97 +125,144 @@ export class Browser {
 			}
 
 			if (!url) {
+				console.log("[DO] No URL provided, returning help page.");
 				return this.buildHelpResponse();
 			}
 
-			if (!this.isValidUrl(url)) {
+			if (!isValidUrl(url)) {
+				console.error("[DO] Invalid URL provided:", url);
 				return new Response(JSON.stringify({ error: 'Invalid URL provided, should be a full URL starting with http:// or https://' }), { 
 					status: 400,
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
 
+			// Ensure browser is running
+			console.log("[DO] Ensuring browser instance is active...");
 			if (!(await this.ensureBrowser())) {
-				return new Response(JSON.stringify({ error: 'Could not start browser instance' }), { 
+				console.error("[DO] Failed to ensure browser instance.");
+				return new Response(JSON.stringify({ error: 'Could not start or connect to browser instance' }), {
 					status: 500,
 					headers: { 'Content-Type': 'application/json' }
 				});
 			}
+			console.log("[DO] Browser instance is active.");
 
-			return crawlSubpages
-				? this.crawlSubpages(url, htmlDetails, contentType)
-				: this.processSinglePage(url, htmlDetails, contentType);
+			// Process request
+			if (crawlSubpages) {
+				console.log(`[DO] Starting subpage crawl for: ${url}`);
+				return this.crawlSubpages(url, htmlDetails, contentType);
+			} else {
+				console.log(`[DO] Processing single page: ${url}`);
+				return this.processSinglePage(url, htmlDetails, contentType);
+			}
 		} catch (error) {
-			console.error('Error in Browser.fetch:', error);
+			console.error('[DO] Error in Browser.fetch:', error);
 			return new Response(JSON.stringify({ 
-				error: 'Browser fetch error',
+				error: 'Durable Object fetch error',
 				message: error instanceof Error ? error.message : String(error)
 			}), { 
 				status: 500,
 				headers: { 'Content-Type': 'application/json' }
 			});
+		} finally {
+			// Reset keptAliveInSeconds after processing a request
+			this.keptAliveInSeconds = 0;
+			console.log("[DO] Reset keptAliveInSeconds counter.");
+			// Ensure alarm is set to keep the DO alive or eventually shut down the browser
+			this.ensureAlarmIsSet();
+		}
+	}
+	
+	async ensureAlarmIsSet() {
+		const currentAlarm = await this.storage.getAlarm();
+		if (currentAlarm === null) {
+			console.log("[DO] No alarm set, setting keep-alive alarm.");
+			await this.storage.setAlarm(Date.now() + TEN_SECONDS);
 		}
 	}
 
-	async ensureBrowser() {
+	async ensureBrowser(): Promise<boolean> {
 		let retries = 3;
-		while (retries) {
+		while (retries > 0) {
 			if (!this.browser || !this.browser.isConnected()) {
+				console.log(`[DO Browser] Browser not connected or initialized. Attempting to launch (Retries left: ${retries})...`);
 				try {
 					this.browser = await puppeteer.launch(this.env.MYBROWSER);
+					console.log("[DO Browser] New browser instance launched successfully.");
 					return true;
 				} catch (e) {
-					console.error(`[Browser] Could not start browser instance. Error: ${e}`);
+					console.error(`[DO Browser] Could not launch browser instance. Error: ${e}`);
 					retries--;
 					if (!retries) {
+						console.error("[DO Browser] Max retries reached. Failed to launch browser.");
 						return false;
 					}
 
+					// Attempt to clean up potentially broken sessions
+					console.log("[DO Browser] Attempting to clean up existing browser sessions...");
 					try {
 						const sessions = await puppeteer.sessions(this.env.MYBROWSER);
-
+						console.log(`[DO Browser] Found ${sessions.length} sessions.`);
 						for (const session of sessions) {
+							console.log(`[DO Browser] Attempting to connect and close session: ${session.sessionId}`);
+							try {
 							const b = await puppeteer.connect(this.env.MYBROWSER, session.sessionId);
 							await b.close();
+								console.log(`[DO Browser] Closed session: ${session.sessionId}`);
+							} catch (closeError) {
+								console.warn(`[DO Browser] Failed to close session ${session.sessionId}:`, closeError);
+							}
 						}
 					} catch (sessionError) {
-						console.error(`Failed to clean up sessions: ${sessionError}`);
+						console.error(`[DO Browser] Failed to list or clean up sessions: ${sessionError}`);
 					}
-
-					console.log(`Retrying to start browser instance. Retries left: ${retries}`);
+					console.log(`[DO Browser] Retrying browser launch...`);
 				}
 			} else {
-				return true;
+				console.log("[DO Browser] Existing browser instance is connected.");
+				return true; // Browser exists and is connected
 			}
 		}
+		return false; // Should not be reached if retries > 0
 	}
 
-	async crawlSubpages(baseUrl: string, enableDetailedResponse: boolean, contentType: string) {
+	async crawlSubpages(baseUrl: string, enableDetailedResponse: boolean, contentType: string): Promise<Response> {
+		let page: Page | null = null;
 		try {
-			const page = await this.browser!.newPage();
-			await page.goto(baseUrl);
+			console.log(`[DO Crawl] Starting crawl for base URL: ${baseUrl}`);
+			page = await this.browser!.newPage();
+			console.log(`[DO Crawl] Navigating to base URL: ${baseUrl}`);
+			await page.goto(baseUrl, { waitUntil: 'networkidle0' });
+			console.log(`[DO Crawl] Extracting links from: ${baseUrl}`);
 			const links = await this.extractLinks(page, baseUrl);
-			await page.close();
+			console.log(`[DO Crawl] Found ${links.length} links on ${baseUrl}.`);
+			await page.close(); // Close the page used for link extraction
+			page = null; // Ensure page is marked as closed
 
-			const uniqueLinks = Array.from(new Set(links)).splice(0, 10);
-			const md = await this.getWebsiteMarkdown({
-				urls: uniqueLinks as string[],
+			const uniqueLinks = Array.from(new Set(links)).slice(0, 10); // Limit to 10 unique links
+			console.log(`[DO Crawl] Processing ${uniqueLinks.length} unique subpages.`);
+
+			const results = await this.getWebsiteMarkdown({ // Changed variable name to 'results'
+				urls: uniqueLinks,
 				enableDetailedResponse,
-				classThis: this,
-				env: this.env,
+				// classThis: this, // No longer needed as getWebsiteMarkdown is part of the class
+				// env: this.env, // No longer needed
 			});
 
 			let status = 200;
-			if (md.some((item) => item.md === 'Rate limit exceeded')) {
+			if (results.some((item) => item.error && item.md === 'Rate limit exceeded')) {
+				console.warn(`[DO Crawl] Rate limit hit during subpage processing for ${baseUrl}`);
 				status = 429;
 			}
 
-			return new Response(JSON.stringify(md), { 
+			console.log(`[DO Crawl] Finished crawl for ${baseUrl}. Returning ${results.length} results with status ${status}.`);
+			return new Response(JSON.stringify(results), {
 				status: status,
 				headers: { 'Content-Type': 'application/json' }
 			});
 		} catch (error) {
-			console.error('Error in crawlSubpages:', error);
+			console.error(`[DO Crawl] Error crawling subpages for ${baseUrl}:`, error);
 			return new Response(JSON.stringify({ 
 				error: 'Failed to crawl subpages',
 				message: error instanceof Error ? error.message : String(error),
@@ -203,823 +271,304 @@ export class Browser {
 				status: 500,
 				headers: { 'Content-Type': 'application/json' }
 			});
+		} finally {
+			if (page) {
+				try { await page.close(); } catch (e) { console.error("[DO Crawl] Error closing page in finally block:", e); }
+			}
 		}
 	}
 
-	async processSinglePage(url: string, enableDetailedResponse: boolean, contentType: string) {
+	async processSinglePage(url: string, enableDetailedResponse: boolean, contentType: string): Promise<Response> {
 		try {
-			const md = await this.getWebsiteMarkdown({
+			console.log(`[DO SinglePage] Processing URL: ${url}`);
+			const results = await this.getWebsiteMarkdown({ // Changed variable name
 				urls: [url],
 				enableDetailedResponse,
-				classThis: this,
-				env: this.env,
+				// classThis: this, // No longer needed
+				// env: this.env, // No longer needed
 			});
+
+			const result = results[0]; // Get the single result
+			let status = result.error ? (result.status || 500) : 200;
+			if (result.md === 'Rate limit exceeded') {
+				status = 429;
+			}
+
+			console.log(`[DO SinglePage] Finished processing ${url}. Status: ${status}, ContentType: ${contentType}`);
 			
 			if (contentType === 'json') {
-				let status = 200;
-				if (md.some((item) => item.md === 'Rate limit exceeded')) {
-					status = 429;
-				}
-				return new Response(JSON.stringify(md), { 
+				// Always return array for JSON, even with errors
+				return new Response(JSON.stringify(results), {
+					status: status,
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} else { // contentType === 'text'
+				if (result.error) {
+					// For text errors, return JSON error object for clarity
+					console.error(`[DO SinglePage] Error processing ${url} for text response:`, result.errorDetails);
+					return new Response(JSON.stringify({ 
+						error: result.md, 
+						message: result.errorDetails || 'Error processing page', 
+						url: url 
+					}), {
 					status: status,
 					headers: { 'Content-Type': 'application/json' }
 				});
 			} else {
-				return new Response(md[0].md, {
-					status: md[0].md === 'Rate limit exceeded' ? 429 : 200,
-					headers: { 'Content-Type': 'text/plain' }
-				});
+					// Successful text response
+					return new Response(result.md, {
+						status: status,
+						headers: { 'Content-Type': 'text/plain;charset=UTF-8' }
+					});
+				}
 			}
 		} catch (error) {
-			console.error('Error in processSinglePage:', error);
+			console.error(`[DO SinglePage] Unexpected error processing ${url}:`, error);
 			const errorResponse = {
 				error: 'Failed to process page',
 				message: error instanceof Error ? error.message : String(error),
 				url: url
 			};
 			
-			if (contentType === 'json') {
-				return new Response(JSON.stringify([errorResponse]), { 
+			// Return JSON error regardless of requested contentType on unexpected errors
+			return new Response(JSON.stringify(contentType === 'json' ? [errorResponse] : errorResponse), {
 					status: 500,
 					headers: { 'Content-Type': 'application/json' }
 				});
-			} else {
-				return new Response(JSON.stringify(errorResponse), { 
-					status: 500,
-					headers: { 'Content-Type': 'application/json' }
-				});
-			}
 		}
 	}
 
-	async extractLinks(page: Page, baseUrl: string) {
+	async extractLinks(page: Page, baseUrl: string): Promise<string[]> {
 		try {
-			return await page.evaluate((baseUrl) => {
+			console.log(`[DO LinkExtract] Extracting links from ${baseUrl}`);
+			return await page.evaluate((base) => {
+				// Ensure base ends with / for correct startsWith check
+				const normalizedBase = base.endsWith('/') ? base : base + '/';
 				return Array.from(document.querySelectorAll('a'))
-					.map((link) => (link as { href: string }).href)
-					.filter((link) => link.startsWith(baseUrl));
+					.map(link => (link as HTMLAnchorElement).href)
+					.filter(link => {
+						try {
+							// Basic validation and ensure it's http/https
+							if (!link || !link.startsWith('http')) return false;
+							const linkUrl = new URL(link);
+							// Check if it starts with the base URL (ignoring potential trailing slash differences)
+							return linkUrl.href.startsWith(normalizedBase) || linkUrl.href === base;
+						} catch (e) {
+							// Ignore invalid URLs during mapping/filtering
+							return false;
+						}
+					});
 			}, baseUrl);
 		} catch (error) {
-			console.error('Error extracting links:', error);
+			console.error(`[DO LinkExtract] Error extracting links from ${baseUrl}:`, error);
 			return [];
 		}
 	}
 
-	async getTweet(tweetID: string) {
-		try {
-			const url = `https://cdn.syndication.twimg.com/tweet-result?id=${tweetID}&lang=en&features=tfw_timeline_list%3A%3Btfw_follower_count_sunset%3Atrue%3Btfw_tweet_edit_backend%3Aon%3Btfw_refsrc_session%3Aon%3Btfw_fosnr_soft_interventions_enabled%3Aon%3Btfw_show_birdwatch_pivots_enabled%3Aon%3Btfw_show_business_verified_badge%3Aon%3Btfw_duplicate_scribes_to_settings%3Aon%3Btfw_use_profile_image_shape_enabled%3Aon%3Btfw_show_blue_verified_badge%3Aon%3Btfw_legacy_timeline_sunset%3Atrue%3Btfw_show_gov_verified_badge%3Aon%3Btfw_show_business_affiliate_badge%3Aon%3Btfw_tweet_edit_frontend%3Aon&token=4c2mmul6mnh`;
-
-			const resp = await fetch(url, {
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3',
-					Accept: 'application/json',
-					'Accept-Language': 'en-US,en;q=0.5',
-					'Accept-Encoding': 'gzip, deflate, br',
-					Connection: 'keep-alive',
-					'Upgrade-Insecure-Requests': '1',
-					'Cache-Control': 'max-age=0',
-					TE: 'Trailers',
-				},
-			});
-			console.log(resp.status);
-			const data = (await resp.json()) as Tweet;
-
-			return data;
-		} catch (error) {
-			console.error('Error fetching tweet:', error);
-			return null;
-		}
-	}
-
-	async getYouTubeMetadata(url: string): Promise<string> {
-		// Skip browser interaction entirely for YouTube
-		// YouTube's UI changes frequently and is hard to scrape reliably
-		
-		try {
-			// Extract video ID
-			let videoId = '';
-			if (url.includes('youtube.com/watch')) {
-				const urlObj = new URL(url);
-				videoId = urlObj.searchParams.get('v') || '';
-			} else if (url.includes('youtu.be/')) {
-				videoId = url.split('youtu.be/')[1]?.split('?')[0] || '';
-			}
-			
-			if (!videoId) {
-				return `# YouTube Video\n\nCould not extract video ID from: ${url}`;
-			}
-			
-			// Create a simple, reliable response
-			return `# YouTube Video
-
-## Information
-- **Video ID**: ${videoId}
-- **Direct Link**: ${url}
-- **Embed Code**: <iframe width="560" height="315" src="https://www.youtube.com/embed/${videoId}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
-
-To view this video, visit: ${url}`;
-		} catch (error) {
-			console.error('[YouTube] Error:', error);
-			return `# YouTube Video\n\nError processing: ${url}\n\n${error instanceof Error ? error.message : String(error)}`;
-		}
-	}
-
-	// Reddit API helpers - simplified to only use public API without OAuth
-	async fetchRedditSubredditMarkdown(url: string, env: Env): Promise<string> {
-		try {
-			console.log(`[Reddit] === STARTING FETCH FOR URL: ${url} ===`);
-			// Extract subreddit name from URL
-			const match = url.match(/reddit\.com\/r\/([A-Za-z0-9_-]+)/i);
-			if (!match) {
-				console.error('[Reddit] Invalid URL format:', url);
-				return 'Invalid Reddit URL format';
-			}
-			
-			const subreddit = match[1];
-			console.log('[Reddit] Fetching subreddit:', subreddit);
-			
-			// Use cache first
-			const cacheKey = `Reddit:${url}`;
-			const cached = await env.MD_CACHE.get(cacheKey);
-			if (cached) {
-				console.log('[Reddit] STEP 1: Using cached content for:', url);
-				console.log('[Reddit] Using cached content for:', url);
-				return cached;
-			}
-			console.log('[Reddit] STEP 1: No cache found, proceeding with API fetch');
-			
-			// Try public API first
-			console.log('[Reddit] STEP 2: Attempting public API fetch');
-			console.log('[Reddit] Trying public API first');
-			const publicApiResult = await this.fetchRedditPublicApi(subreddit, url, env, cacheKey);
-			
-			console.log('[Reddit] STEP 3: Public API result - isRateLimited:', publicApiResult.isRateLimited, 'Has content:', !!publicApiResult.md);
-			// If public API succeeds, return the result
-			if (!publicApiResult.isRateLimited && publicApiResult.md) {
-				console.log('[Reddit] STEP 4A: Public API successful, returning content');
-				console.log('[Reddit] Public API successful');
-				
-				// Cache successful responses
-				if (publicApiResult.md && publicApiResult.md.length > 100) {
-					console.log('[Reddit] STEP 5A: Caching public API response');
-					console.log('[Reddit] Caching public API response for:', subreddit);
-					await env.MD_CACHE.put(cacheKey, publicApiResult.md, { expirationTtl: 3600 });
-				}
-				
-				return publicApiResult.md;
-			}
-			
-			// If we reached here, we hit a rate limit or error with public API
-			console.log('[Reddit] STEP 4B: Public API failed or rate limited, attempting authenticated request');
-			console.log('[Reddit] Public API failed. Attempting authenticated request...');
-			
-			// Try authenticated API as fallback
-			console.log('[Reddit] STEP 5B: Starting authenticated API request');
-			const authResult = await this.fetchRedditAuthenticatedApi(subreddit, url, env, cacheKey);
-			
-			console.log('[Reddit] STEP 6: Authenticated API completed, response length:', authResult.length);
-			// Log detailed information about the auth result
-			console.log('[Reddit] Auth API response length:', authResult.length);
-			console.log('[Reddit] Auth API response preview:', authResult.substring(0, 100));
-			
-			// Check if auth result contains error indicators
-			const hasErrorIndicators = authResult.includes('Failed to') || 
-				authResult.includes('Error') || 
-				authResult.includes('limit') ||
-				authResult.includes('failed');
-			console.log('[Reddit] STEP 7: Auth result contains error indicators:', hasErrorIndicators);
-			
-			// Cache successful authenticated responses
-			if (authResult && authResult.length > 100) {
-				console.log('[Reddit] STEP 8: Caching authenticated response');
-				console.log('[Reddit] Caching authenticated response for:', url);
-				await env.MD_CACHE.put(cacheKey, authResult, { expirationTtl: 3600 });
-			}
-			
-			console.log(`[Reddit] === COMPLETED FETCH FOR URL: ${url} ===`);
-			return authResult;
-		} catch (error) {
-			console.log('[Reddit] === ERROR IN FETCH PROCESS ===');
-			console.error('[Reddit] Error in fetchRedditSubredditMarkdown:', error);
-			console.error('[Reddit] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-			return `Error fetching Reddit content: ${error instanceof Error ? error.message : String(error)}`;
-		}
-	}
-	
-	// Helper method to fetch from public Reddit API
-	async fetchRedditPublicApi(subreddit: string, url: string, env: Env, cacheKey: string): Promise<{md: string, isRateLimited: boolean}> {
-		try {
-			console.log('[Reddit-Public] === STARTING PUBLIC API FETCH ===');
-			// Create the public API URL
-			const apiUrl = `https://www.reddit.com/r/${subreddit}/hot.json?limit=5`;
-			console.log('[Reddit] Fetching from public API:', apiUrl);
-			
-			// Fetch without authentication
-			console.log('[Reddit-Public] Sending request to public API');
-			const resp = await fetch(apiUrl, {
-				method: 'GET',
-				headers: {
-					'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-					'Accept': 'application/json',
-					'Cache-Control': 'no-cache'
-				}
-			});
-			
-			console.log(`[Reddit-Public] Public API response received: Status ${resp.status}`);
-			console.log('[Reddit] Response status:', resp.status);
-			console.log('[Reddit] Response headers:', JSON.stringify(Object.fromEntries([...resp.headers.entries()])));
-			
-			// Check for rate limiting
-			if (resp.status === 429 || resp.headers.get('x-ratelimit-remaining') === '0') {
-				console.log('[Reddit-Public] RATE LIMIT DETECTED from status code or headers');
-				console.log('[Reddit] Rate limit hit on public API');
-				console.log('[Reddit] Rate limit details:', 
-					resp.headers.get('x-ratelimit-used'), 
-					resp.headers.get('x-ratelimit-remaining'), 
-					resp.headers.get('x-ratelimit-reset'));
-				return { md: '', isRateLimited: true };
-			}
-			
-			if (!resp.ok) {
-				console.log(`[Reddit-Public] Response not OK: ${resp.status} ${resp.statusText}`);
-				console.error(`[Reddit] API error: ${resp.status} ${resp.statusText}`);
-				const errorText = await resp.text();
-				console.log(`[Reddit-Public] Error response body: ${errorText.substring(0, 100)}...`);
-				console.error('[Reddit] Error details:', errorText);
-				
-				// Return specific message about rate limiting if detected in response
-				if (errorText.includes('rate limit') || errorText.includes('ratelimit')) {
-					console.log('[Reddit-Public] RATE LIMIT DETECTED in response text');
-					console.log('[Reddit] Rate limit detected in response text');
-					return { md: '', isRateLimited: true };
-				}
-				console.log('[Reddit-Public] Returning error message (not rate limited)');
-				return { md: `Failed to fetch from Reddit API: ${resp.status}`, isRateLimited: false };
-			}
-			
-			console.log('[Reddit-Public] Successfully received OK response');
-			const responseText = await resp.text();
-			console.log('[Reddit] API response length:', responseText.length);
-			console.log('[Reddit] API response preview (first 100 chars):', responseText.substring(0, 100));
-			
-			let data;
-			try {
-				console.log('[Reddit-Public] Parsing JSON response');
-				data = JSON.parse(responseText);
-			} catch (parseError) {
-				console.log('[Reddit-Public] JSON PARSE ERROR');
-				console.error('[Reddit] JSON parse error:', parseError);
-				console.error('[Reddit] JSON parse error details:', JSON.stringify(parseError, Object.getOwnPropertyNames(parseError)));
-				return { md: 'Error parsing Reddit API response', isRateLimited: false };
-			}
-			
-			// Check if the response contains an error message
-			if (data.error) {
-				console.log(`[Reddit-Public] API returned error: ${data.error}`);
-				console.error('[Reddit] API returned error:', data.error);
-				console.error('[Reddit] Error message:', data.message);
-				return { md: `Reddit API error: ${data.message || data.error}`, isRateLimited: false };
-			}
-			
-			console.log('[Reddit-Public] Formatting response data to markdown');
-			const md = this.formatRedditData(data, subreddit, url);
-			console.log('[Reddit] Formatted data length:', md.length);
-			if (md.length < 100) {
-				console.log('[Reddit-Public] WARNING: Formatted content suspiciously short');
-				console.error('[Reddit] Formatted content suspiciously short:', md);
-			}
-			
-			// Cache successful responses
-			if (md && md.length > 100) {
-				console.log('[Reddit-Public] Caching successful response');
-				console.log('[Reddit] Caching response for:', url);
-				await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
-			}
-			
-			console.log('[Reddit-Public] === COMPLETED PUBLIC API FETCH ===');
-			return { md, isRateLimited: false };
-		} catch (error) {
-			console.log('[Reddit-Public] === ERROR IN PUBLIC API FETCH ===');
-			console.error('[Reddit] Error in fetchRedditPublicApi:', error);
-			console.error('[Reddit] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-			return { 
-				md: `Error fetching Reddit content: ${error instanceof Error ? error.message : String(error)}`, 
-				isRateLimited: false 
-			};
-		}
-	}
-	
-	// Helper method to fetch from Reddit API with authentication
-	async fetchRedditAuthenticatedApi(subreddit: string, url: string, env: Env, cacheKey: string): Promise<string> {
-		try {
-			console.log('[Reddit-Auth] === STARTING AUTHENTICATED API FETCH ===');
-			console.log('[Reddit] Starting authenticated API request for:', url);
-
-			// First, get an OAuth token
-			const tokenCacheKey = 'Reddit:OAuthToken';
-			let token = await env.MD_CACHE.get(tokenCacheKey);
-			
-			console.log('[Reddit-Auth] Cached token available:', !!token);
-			console.log('[Reddit] Cached token available:', !!token);
-
-			if (!token) {
-				console.log('[Reddit-Auth] No cached token, requesting new token');
-				console.log('[Reddit] Getting new OAuth token');
-				
-				// Fetch new token
-				const authString = `${env.REDDIT_CLIENT_ID}:${env.REDDIT_CLIENT_SECRET}`;
-				console.log('[Reddit-Auth] Client credentials available:', !!env.REDDIT_CLIENT_ID && !!env.REDDIT_CLIENT_SECRET);
-				console.log('[Reddit] Using auth string (first 5 chars):', authString.substring(0, 5) + '...');
-				console.log('[Reddit] Client ID length:', env.REDDIT_CLIENT_ID?.length || 0);
-				console.log('[Reddit] Client secret length:', env.REDDIT_CLIENT_SECRET?.length || 0);
-
-				console.log('[Reddit-Auth] Sending token request to Reddit');
-				const tokenResponse = await fetch('https://www.reddit.com/api/v1/access_token', {
-					method: 'POST',
-					headers: {
-						'Authorization': `Basic ${btoa(authString)}`,
-						'Content-Type': 'application/x-www-form-urlencoded',
-						'User-Agent': 'CloudflareWorker/1.0'
-					},
-					body: 'grant_type=client_credentials&scope=read'
-				});
-				
-				console.log(`[Reddit-Auth] Token response received: Status ${tokenResponse.status}`);
-				console.log('[Reddit] Token response status:', tokenResponse.status);
-				console.log('[Reddit] Token response headers:', JSON.stringify(Object.fromEntries([...tokenResponse.headers.entries()])));
-
-				if (!tokenResponse.ok) {
-					console.log(`[Reddit-Auth] Token response not OK: ${tokenResponse.status}`);
-					const errorText = await tokenResponse.text();
-					console.log(`[Reddit-Auth] Token error response: ${errorText}`);
-					console.error('[Reddit] OAuth error:', errorText);
-					// Clear any existing token if authentication fails
-					await env.MD_CACHE.delete(tokenCacheKey);
-					return `Failed to authenticate with Reddit: ${tokenResponse.status}`;
-				}
-				
-				// Get response text for debugging
-				const tokenResponseText = await tokenResponse.text();
-				console.log(`[Reddit-Auth] Token response received, length: ${tokenResponseText.length}`);
-				console.log('[Reddit] Token response (first 30 chars):', tokenResponseText.substring(0, 30) + '...');
-				
-				let tokenData;
-				try {
-					console.log('[Reddit-Auth] Parsing token response');
-					tokenData = JSON.parse(tokenResponseText) as { access_token: string };
-				} catch (parseError) {
-					console.log('[Reddit-Auth] TOKEN PARSE ERROR');
-					console.error('[Reddit] Failed to parse token response:', parseError);
-					console.error('[Reddit] Parse error details:', JSON.stringify(parseError, Object.getOwnPropertyNames(parseError)));
-					return `Failed to parse Reddit authentication response: ${tokenResponseText.substring(0, 100)}`;
-				}
-				
-				token = tokenData.access_token;
-				
-				if (!token) {
-					console.log('[Reddit-Auth] NO TOKEN IN RESPONSE');
-					console.error('[Reddit] No token in response:', tokenResponseText);
-					return `Reddit did not provide an access token: ${tokenResponseText.substring(0, 100)}`;
-				}
-				
-				console.log('[Reddit-Auth] Successfully extracted token');
-				console.log('[Reddit] Received token (first 5 chars):', token.substring(0, 5) + '...');
-				
-				// Cache the token (expires in 1 hour by default, we'll use 50 minutes to be safe)
-				if (token) {
-					console.log('[Reddit-Auth] Caching token');
-					await env.MD_CACHE.put(tokenCacheKey, token, { expirationTtl: 3000 }); // 50 minutes
-					console.log('[Reddit] Token cached successfully');
-				} else {
-					console.log('[Reddit-Auth] NO TOKEN TO CACHE');
-					console.error('[Reddit] No token received from Reddit');
-					return 'Failed to obtain Reddit access token';
-				}
-			}
-			
-			console.log('[Reddit-Auth] Token available, proceeding with authenticated request');
-			// Now use the token to fetch data
-			console.log('[Reddit] Using authenticated API for subreddit:', subreddit);
-			const apiUrl = `https://oauth.reddit.com/r/${subreddit}/hot?limit=5`;
-			console.log('[Reddit] API URL:', apiUrl);
-			
-			console.log('[Reddit-Auth] Sending authenticated API request');
-			const resp = await fetch(apiUrl, {
-				headers: {
-					'Authorization': `Bearer ${token}`,
-					'User-Agent': 'url2md/1.0 (by /u/your_username)',
-					'Accept': 'application/json'
-				}
-			});
-			
-			console.log(`[Reddit-Auth] Authenticated API response received: Status ${resp.status}`);
-			console.log('[Reddit] API response status:', resp.status);
-			console.log('[Reddit] API response headers:', JSON.stringify(Object.fromEntries([...resp.headers.entries()])));
-
-			if (!resp.ok) {
-				// If unauthorized, the token might be invalid, so clear it from cache
-				if (resp.status === 401) {
-					console.log('[Reddit-Auth] UNAUTHORIZED: Invalid or expired token');
-					console.error('[Reddit] Token invalid or expired, clearing cache');
-					await env.MD_CACHE.delete(tokenCacheKey);
-					return `Reddit authentication failed. Token may have expired.`;
-				}
-				
-				console.log(`[Reddit-Auth] Response not OK: ${resp.status}`);
-				// Get response text for debugging
-				const errorText = await resp.text();
-				console.log(`[Reddit-Auth] Error response body: ${errorText.substring(0, 100)}...`);
-				console.error(`[Reddit] Authenticated API error: ${resp.status}`, errorText);
-				return `Failed to fetch from Reddit API (authenticated): ${resp.status} - ${errorText.substring(0, 100)}`;
-			}
-			
-			console.log('[Reddit-Auth] Successfully received OK response');
-			// Get response text for debugging
-			const responseText = await resp.text();
-			console.log('[Reddit] API response received (first 30 chars):', responseText.substring(0, 30) + '...');
-			console.log('[Reddit] API response length:', responseText.length);
-			
-			let data;
-			try {
-				console.log('[Reddit-Auth] Parsing JSON response');
-				data = JSON.parse(responseText);
-			} catch (parseError) {
-				console.log('[Reddit-Auth] JSON PARSE ERROR');
-				console.error('[Reddit] Failed to parse API response:', parseError);
-				console.error('[Reddit] Parse error details:', JSON.stringify(parseError, Object.getOwnPropertyNames(parseError)));
-				return `Failed to parse Reddit API response: ${responseText.substring(0, 100)}`;
-			}
-			
-			// Check if the response contains an error message
-			if (data.error) {
-				console.log(`[Reddit-Auth] API returned error: ${data.error}`);
-				console.error('[Reddit] API returned error:', data.error);
-				console.error('[Reddit] Error message:', data.message || 'No message');
-				return `Reddit API error: ${data.message || data.error}`;
-			}
-			
-			console.log('[Reddit-Auth] Formatting response data to markdown');
-			const md = this.formatRedditData(data, subreddit, url);
-			console.log('[Reddit] Formatted data length:', md.length);
-			
-			// Log detailed information if content is suspiciously short
-			if (md.length < 100) {
-				console.log('[Reddit-Auth] WARNING: Formatted content suspiciously short');
-				console.error('[Reddit] Formatted content suspiciously short:', md);
-			}
-
-			// Cache successful response
-			if (md && md.length > 100) {
-				console.log('[Reddit-Auth] Caching successful response');
-				console.log('[Reddit] Caching authenticated response for:', url);
-				await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
-			}
-			
-			console.log('[Reddit-Auth] === COMPLETED AUTHENTICATED API FETCH ===');
-			console.log('[Reddit] Authenticated response complete');
-			return md;
-		} catch (error) {
-			console.log('[Reddit-Auth] === ERROR IN AUTHENTICATED API FETCH ===');
-			console.error('[Reddit] Error in fetchRedditAuthenticatedApi:', error);
-			console.error('[Reddit] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-			return `Error fetching Reddit content: ${error instanceof Error ? error.message : String(error)}`;
-		}
-	}
-	
-	// Helper method to format Reddit data to markdown
-	formatRedditData(data: any, subreddit: string, originalUrl: string): string {
-		if (!data?.data?.children?.length) {
-			return 'No posts found in this subreddit.';
-		}
-		
-		let md = `# Subreddit: r/${subreddit}\n\n`;
-		
-		for (const post of data.data.children) {
-			const p = post.data;
-			if (!p) continue;
-			
-			md += `## ${p.title || 'Untitled post'}\n\n`;
-			md += `- **Author:** u/${p.author || 'unknown'}\n`;
-			md += `- **Score:** ${p.score || 0}\n`;
-			md += `- **Comments:** ${p.num_comments || 0}\n`;
-			md += `- **Posted:** ${new Date(p.created_utc * 1000).toLocaleString()}\n\n`;
-			
-			if (p.selftext) {
-				// Limit text length with ellipsis if too long
-				const maxLength = 500;
-				const text = p.selftext.length > maxLength 
-					? p.selftext.substring(0, maxLength) + '...' 
-					: p.selftext;
-				md += `${text}\n\n`;
-			}
-			
-			if (p.url && !p.url.includes('reddit.com')) {
-				md += `**Link:** [${p.url}](${p.url})\n\n`;
-			}
-			
-			md += `**Reddit link:** [View full post](https://reddit.com${p.permalink})\n\n`;
-			md += `---\n\n`;
-		}
-		
-		md += `\nSource: [${originalUrl}](${originalUrl})`;
-		return md;
-	}
-
-	async getWebsiteMarkdown({
-		urls,
-		enableDetailedResponse,
-		classThis,
-		env,
-	}: {
+	/**
+	 * Orchestrates fetching markdown for multiple URLs, routing to specific handlers.
+	 */
+	async getWebsiteMarkdown({ urls, enableDetailedResponse }: {
 		urls: string[];
 		enableDetailedResponse: boolean;
-		classThis: Browser;
-		env: Env;
-	}) {
-		classThis.keptAliveInSeconds = 0;
-
+	}): Promise<{ url: string; md: string; error?: boolean; status?: number; errorDetails?: string }[]> {
+		console.log(`[DO GetMarkdown] Processing ${urls.length} URLs. Detailed: ${enableDetailedResponse}, LLM Filter: ${this.llmFilter}`);
 		try {
 			const isBrowserActive = await this.ensureBrowser();
-
 			if (!isBrowserActive) {
-				return [{ url: urls[0], md: '[Browser] Could not start browser instance', error: true }];
+				console.error("[DO GetMarkdown] Browser instance not active. Cannot process URLs.");
+				return urls.map(url => ({ url, md: '[Browser] Could not start browser instance', error: true, status: 500 }));
 			}
 
-			return await Promise.all( // Process all URLs in parallel
-
-				urls.map(async (url) => {
+			// Process all URLs in parallel
+			const results = await Promise.all(
+				urls.map(async (url): Promise<{ url: string; md: string; error?: boolean; status?: number; errorDetails?: string }> => {
 					try {
+						// --- Rate Limiting Check (within parallel processing) ---
 						const ip = this.request?.headers.get('cf-connecting-ip');
-
-						if (this.token !== env.BACKEND_SECURITY_TOKEN) {
-							const { success } = await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
-
+						if (this.token !== this.env.BACKEND_SECURITY_TOKEN) {
+							const { success } = await this.env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
 							if (!success) {
-								return { url, md: 'Rate limit exceeded', error: true };
+								console.warn(`[DO GetMarkdown] Rate limit exceeded for ${url} (IP: ${ip ?? 'no-ip'})`);
+								return { url, md: 'Rate limit exceeded', error: true, status: 429 };
 							}
 						}
+						// --- End Rate Limiting Check ---
 
-						console.log(`[getWebsiteMarkdown] Passed rate limit check for ${url}`)
+						console.log(`[DO GetMarkdown] Processing URL: ${url}`);
+						const cacheIdBase = url + (enableDetailedResponse ? '-detailed' : '') + (this.llmFilter ? '-llm' : '');
 
-						const id = url + (enableDetailedResponse ? '-detailed' : '') + (this.llmFilter ? '-llm' : '');
-						console.log(`[getWebsiteMarkdown] Checking main cache for id: ${id}`)
-						const cached = await env.MD_CACHE.get(id);
+						let result: { url: string; md: string; error?: boolean; status?: number; errorDetails?: string };
 
-						// Special YouTube handling
+						// --- URL Routing --- 
 						if (url.includes('youtube.com/watch') || url.includes('youtu.be/')) {
-							const cacheKey = `Youtube:${url}`;
-							const cached = await env.MD_CACHE.get(cacheKey);
-
-							if (cached) return { url, md: cached };
-							
-							// Call our dedicated YouTube handler method
-							const md = await this.getYouTubeMetadata(url);
-							
-							await env.MD_CACHE.put(cacheKey, md, { expirationTtl: 3600 });
-							return { url, md };
-						}
-
-						// Special twitter handling
-						if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
+							console.log(`[DO GetMarkdown] Routing to YouTube handler for: ${url}`);
+							const md = await getYouTubeMetadata(url, this.env);
+							result = { url, md }; // YouTube handler includes caching
+						
+						} else if (url.startsWith('https://x.com') || url.startsWith('https://twitter.com')) {
 							const urlParts = url.split('/');
-							const lastPart = urlParts.pop();
-							const isProfilePage = urlParts.length <= 3 || (urlParts.length === 4 && lastPart === '');
-							
-							if (isProfilePage) {
-								// Handle profile page
-								const username = urlParts[urlParts.length - 1];
-								const page = await this.browser!.newPage();
-								try {
-									await page.goto(url, { waitUntil: 'networkidle0' });
-									
-									// Wait for tweets to load
-									await page.waitForSelector('article', { timeout: TWITTER_TIMEOUT }).catch(() => console.log('Timeout waiting for articles'));
-									
-									// Scroll down to load more tweets - use explicit values to avoid reference errors
-									await page.evaluate(() => {
-										window.scrollBy(0, 2000); // Use fixed value instead of LOAD_MORE_TWEETS_SCROLL_AMOUNT
-										return new Promise(resolve => setTimeout(resolve, 2000)); // Use fixed value instead of LOAD_MORE_TWEETS_SCROLL_DELAY
-									});
-									
-									const profileContent = await page.evaluate((username) => {
-										const tweets = Array.from(document.querySelectorAll('article')).map(tweet => {
-											const rawText = tweet.innerText;
-											
-											// Get only the tweet text without engagement numbers and clean up encoding
-											const tweetText = rawText
-												.split(/\d+K|\d+M/)[0]
-												.replace(/\u00A0/g, ' ')    // Replace non-breaking space
-												.replace(/[·•]/g, '-')      // Replace any kind of dots/bullets with simple dash
-												.replace(/\s*-\s*/g, ' - ') // Normalize spacing around dash
-												.replace(/[""]/g, '"')      // Replace smart quotes
-												.replace(/['']/g, "'")      // Replace smart apostrophes
-												.replace(/\s+/g, ' ')       // Normalize whitespace
-												.trim();
-											return tweetText;
-										}).filter(text => text.length > 0).slice(0, 10);
-										
-										const profileName = document.querySelector('h2')?.textContent?.trim() || username;
-										const bio = document.querySelector('[data-testid="UserDescription"]')?.textContent?.trim() || '';
-										
-										return {
-											profileName,
-											bio,
-											tweets
-										};
-									}, username);
-									
-									const profileMd = `
-									# ${profileContent.profileName} (@${username})
-										${profileContent.bio}
-										## Recent Tweets
-										${profileContent.tweets.map((tweet, index) => `### Tweet ${index + 1}\n${tweet}`).join('\n\n')}
-										Profile URL: ${url}`;
-									
-									return { url, md: profileMd };
-								} catch (error) {
-									console.error(`Error processing profile ${url}:`, error);
-									return { url, md: `Failed to fetch profile: ${error instanceof Error ? error.message : String(error)}`, error: true };
-								} finally {
-									await page.close();
-								}
+							const lastPart = urlParts[urlParts.length - 1];
+							// Simpler check: is the last part likely a user ID or a status ID?
+							const isLikelyStatus = /^[0-9]+$/.test(lastPart?.split('?')[0] ?? '');
+
+							if (!isLikelyStatus && urlParts.length > 3) { // Assume profile if not status and has path beyond domain
+								console.log(`[DO GetMarkdown] Routing to Twitter profile handler for: ${url}`);
+								result = await handleTwitterProfilePage(url, this.browser!, this.env);
+							} else if (isLikelyStatus) { // Assume tweet if last part is numeric
+								console.log(`[DO GetMarkdown] Routing to Twitter tweet handler for: ${url}`);
+								result = await handleTwitterTweetPage(url, this.env);
 							} else {
-								// Handle individual tweet
-								const tweetID = lastPart;
-								if (!tweetID) return { url, md: 'Invalid tweet URL', error: true };
+								console.warn(`[DO GetMarkdown] Could not determine Twitter URL type: ${url}. Falling back to default.`);
+								result = { url, md: await handleDefaultPage(url, enableDetailedResponse, this.browser!), error: false }; // Assume no error initially for default
+							}
 
-								const cacheKey = `Twitter:${tweetID}`;
-								const cacheFind = await env.MD_CACHE.get(cacheKey);
-								if (cacheFind) return { url, md: cacheFind };
+						} else if (url.includes('reddit.com/r/')) {
+							console.log(`[DO GetMarkdown] Routing to Reddit handler for: ${url}`);
+							result = await handleRedditURL(url, this.env); // Reddit handler includes caching
 
-								console.log(tweetID);
-								const tweet = await this.getTweet(tweetID);
-
-								if (!tweet || typeof tweet !== 'object' || tweet.text === undefined) return { url, md: 'Tweet not found', error: true };
-
-								const tweetMd = `Tweet from @${tweet.user?.name ?? tweet.user?.screen_name ?? 'Unknown'}
-
-								${tweet.text}
-								Images: ${tweet.photos ? tweet.photos.map((photo) => photo.url).join(', ') : 'none'}
-								Time: ${tweet.created_at}, Likes: ${tweet.favorite_count}, Retweets: ${tweet.conversation_count}
-
-								raw: ${JSON.stringify(tweet)}`;
-								await env.MD_CACHE.put(cacheKey, tweetMd);
-
-								return { url, md: tweetMd };
+						} else { // Default handler for other URLs
+							console.log(`[DO GetMarkdown] Routing to default page handler for: ${url}`);
+							// Check cache for default pages
+							const cacheKey = `Default:${cacheIdBase}`;
+							const cached = await this.env.MD_CACHE.get(cacheKey);
+							if (cached) {
+								console.log(`[DO GetMarkdown] Using cached content for default URL: ${url}`);
+								result = { url, md: cached };
+							} else {
+								console.log(`[DO GetMarkdown] No cache for default URL: ${url}, fetching...`);
+								const md = await handleDefaultPage(url, enableDetailedResponse, this.browser!);
+								result = { url, md }; // Assume success initially
+								// Check if the handler returned an error message
+								if (md.startsWith('## Error')) {
+									console.warn(`[DO GetMarkdown] Default handler returned error for ${url}`);
+									result.error = true;
+									result.status = md.includes('Timeout') ? 504 : 500; // Specific status for timeout
+									result.errorDetails = md;
+								} else if (this.llmFilter && !result.error) {
+									// Apply LLM Filter ONLY if default fetch was successful and filter is enabled
+									console.log(`[DO GetMarkdown] Applying LLM filter for: ${url}`);
+									result.md = await this.applyLlmFilter(md);
+								}
+								// Cache the final result (original, error, or filtered) for default pages
+								if (!result.error) {
+									await this.env.MD_CACHE.put(cacheKey, result.md, { expirationTtl: 3600 });
+									console.log(`[DO GetMarkdown] Cached content for default URL: ${url}`);
+								}
 							}
 						}
+						// --- End URL Routing ---
 
-						console.log(`[getWebsiteMarkdown] Passed Twitter check for ${url}, checking Reddit...`)
-						// Reddit handling
-						if (url.includes('reddit.com/r/')) {
-							console.log(`[getWebsiteMarkdown] ---> Entering Reddit block for ${url} <---`);
-							console.log('[Reddit] Detected Reddit URL:', url);
-							
-							// Let the specialized function handle caching
-							const md = await this.fetchRedditSubredditMarkdown(url, env);
-							console.log('[Reddit] Content fetched, length:', md.length);
-							
-							return { url, md };
-						}
-						console.log(`[getWebsiteMarkdown] URL ${url} is not Reddit, proceeding to default fetch.`)
-
-						let md = cached ?? (await classThis.fetchAndProcessPage(url, enableDetailedResponse));
-
-						if (this.llmFilter && !cached) {
-							// for (let i = 0; i < 60; i++) await env.RATELIMITER.limit({ key: ip ?? 'no-ip' });
-
-							const answer = (await env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
-								prompt: 
-								`You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information. 
-								Please follow these guidelines:
-									Remove any inappropriate content, ads, or irrelevant information
-									If unsure about including something, err on the side of keeping it
-									Answer in English. Include all points in markdown in sufficient detail to be useful.
-									Aim for clean, readable markdown.
-									Return the markdown and nothing else.
-									Do not include any other text or formatting.
-									Input: ${md}
-									Output:\`\`\`markdown\n`,
-							})) as { response: string };
-
-							md = answer.response;
-						}
-
-						await env.MD_CACHE.put(id, md, { expirationTtl: 3600 });
-						return { url, md };
+						return result;
 
 					} catch (error) {
-						console.error(`Error processing URL ${url}:`, error);
+						console.error(`[DO GetMarkdown] Error processing URL ${url} in parallel map:`, error);
 						return { 
 							url, 
-							status: 500,
-							md: 'Failed to process page', 
+							md: 'Failed to process page due to unexpected error',
 							error: true,
+							status: 500,
 							errorDetails: error instanceof Error ? error.message : String(error)
 						};
 					}
-				}),
+				})
 			);
+			console.log(`[DO GetMarkdown] Finished processing all ${urls.length} URLs.`);
+			return results;
 		} catch (error) {
-			console.error('Error in getWebsiteMarkdown:', error);
-			return [{ 
-				url: urls[0], 
-				md: 'Failed to get website markdown', 
-				status: 404,
+			console.error('[DO GetMarkdown] General error in getWebsiteMarkdown:', error);
+			// Return error for all URLs if a general error occurs (e.g., browser init failed)
+			return urls.map(url => ({
+				url,
+				md: 'Failed to get website markdown due to a system error',
 				error: true,
+				status: 500,
 				errorDetails: error instanceof Error ? error.message : String(error)
-			}];
+			}));
 		}
 	}
 
-	async fetchAndProcessPage(url: string, enableDetailedResponse: boolean): Promise<string> {
-		let page = null;
+	/**
+	 * Applies LLM filtering to the provided markdown content.
+	 */
+	async applyLlmFilter(md: string): Promise<string> {
 		try {
-			page = await this.browser!.newPage();
-			await page.goto(url, { waitUntil: 'networkidle0' });
-			
-			// Add the required scripts with error handling
-			try {
-				await page.addScriptTag({ url: 'https://unpkg.com/@mozilla/readability/Readability.js' });
-				await page.addScriptTag({ url: 'https://unpkg.com/turndown/dist/turndown.js' });
-			} catch (scriptError) {
-				console.error('Error adding script tags:', scriptError);
-				// If scripts fail to load, return a simple HTML extraction
-				try {
-					return await page.evaluate(() => {
-						const mainContent = document.body.innerText;
-						return `## ${document.title || 'Untitled Page'}\n\n${mainContent.slice(0, 10000)}`;
-					});
-				} catch (evaluateError) {
-					console.error('Error in page evaluation:', evaluateError);
-					return `## Error\n\nFailed to extract content: ${evaluateError instanceof Error ? evaluateError.message : String(evaluateError)}`;
-				}
+			console.log(`[DO LLM Filter] Running LLM filter on content (length: ${md.length})`);
+			const answer = (await this.env.AI.run('@cf/qwen/qwen1.5-14b-chat-awq', {
+				prompt:
+					`You are an AI assistant that converts webpage content to markdown while filtering out unnecessary information like ads, navigation, footers, and irrelevant sidebars. Focus on the main content.
+                    Keep important elements like titles, headings, text, lists, and code blocks.
+                    Remove inappropriate content.
+                    If unsure about including something, err on the side of keeping it.
+                    Return only the cleaned markdown content, without any introductory text, explanations, or markdown fences (\`\`\`).
+                    Input:\n${md}
+                    Cleaned Markdown Output:`,
+			})) as { response: string };
+
+			console.log(`[DO LLM Filter] Filtered content length: ${answer.response.length}`);
+			// Basic check if filtering significantly reduced content, might indicate issues
+			if (md.length > 100 && answer.response.length < md.length * 0.1) {
+				console.warn('[DO LLM Filter] LLM filter drastically reduced content size. Check output quality.');
 			}
-
-			const md = await page.evaluate((detailed) => {
-				try {
-					const reader = new (globalThis as any).Readability(document.cloneNode(true), {
-						charThreshold: 0,
-						keepClasses: true,
-						nbTopCandidates: 500,
-					});
-
-					const article = reader.parse();
-					const turndownService = new (globalThis as any).TurndownService();
-
-					if (detailed) {
-						const doc = document.cloneNode(true) as HTMLDocument;
-						doc.querySelectorAll('script,style,iframe,noscript').forEach((el: Element) => el.remove());
-						return turndownService.turndown(doc);
-					}
-					
-					return turndownService.turndown(article.content);
-				} catch (evalError) {
-					// If Readability/TurndownService fails, return a simple extraction
-					const title = document.title || 'Untitled Page';
-					const content = document.body.innerText;
-					return `## ${title}\n\n${content.slice(0, SIMPLE_CONTENT_MAX_LENGTH)}`;
-				}
-			}, enableDetailedResponse);
-
-			return md;
+			// Trim potential leading/trailing whitespace or newlines from LLM output
+			return answer.response.trim();
 		} catch (error) {
-			console.error('Error in fetchAndProcessPage:', error);
-			return `Failed to process page: ${error instanceof Error ? error.message : String(error)}`;
-		} finally {
-			if (page) {
-				try {
-					await page.close();
-				} catch (closeError) {
-					console.error('Error closing page:', closeError);
-				}
-			}
+			console.error('[DO LLM Filter] Error during LLM filtering:', error);
+			// Return original markdown if filtering fails
+			return md;
 		}
 	}
 
-	buildHelpResponse() {
+	/**
+	 * Builds the HTML response for the help page.
+	 */
+	buildHelpResponse(): Response {
+		console.log("[DO] Building help page response.");
 		return new Response(html, {
 			headers: { 'content-type': 'text/html;charset=UTF-8' },
 		});
 	}
 
-	isValidUrl(url: string): boolean {
-		return /^(http|https):\/\/[^ "]+$/.test(url);
-	}
-
+	/**
+	 * Handles the scheduled alarm for the Durable Object.
+	 * Used to keep the browser alive or shut it down after inactivity.
+	 */
 	async alarm() {
+		console.log(`[DO Alarm] Alarm triggered. keptAliveInSeconds: ${this.keptAliveInSeconds}`);
 		try {
-			this.keptAliveInSeconds += 10;
+			this.keptAliveInSeconds += 10; // Increment by alarm interval (10 seconds)
+
 			if (this.keptAliveInSeconds < KEEP_BROWSER_ALIVE_IN_SECONDS) {
+				// Browser is active and recent; set the alarm again
+				console.log(`[DO Alarm] Keep-alive threshold not reached (${this.keptAliveInSeconds}s < ${KEEP_BROWSER_ALIVE_IN_SECONDS}s). Setting alarm again.`);
 				await this.storage.setAlarm(Date.now() + TEN_SECONDS);
 			} else {
+				// Inactivity threshold reached; shut down the browser
+				console.log(`[DO Alarm] Keep-alive threshold reached (${this.keptAliveInSeconds}s >= ${KEEP_BROWSER_ALIVE_IN_SECONDS}s). Shutting down browser.`);
 				if (this.browser) {
+					console.log("[DO Alarm] Closing browser instance...");
+					try {
 					await this.browser.close();
-					this.browser = undefined;
+						console.log("[DO Alarm] Browser instance closed successfully.");
+					} catch (closeError) {
+						console.error("[DO Alarm] Error closing browser instance:", closeError);
+					}
+					this.browser = undefined; // Clear the browser instance variable
 				}
+				// Do not set the alarm again; it will be set on the next fetch request
+				console.log("[DO Alarm] Browser shut down. Alarm will be reset on next request.");
 			}
+			// Persist the updated keptAliveInSeconds count
+			await this.storage.put("keptAliveInSeconds", this.keptAliveInSeconds);
 		} catch (error) {
-			console.error('Error in alarm handler:', error);
+			console.error('[DO Alarm] Error in alarm handler:', error);
+			// Attempt to set alarm again even if there was an error to prevent DO from becoming unresponsive
+			try {
+				await this.storage.setAlarm(Date.now() + TEN_SECONDS);
+			} catch (setAlarmError) {
+				console.error('[DO Alarm] Failed to set alarm after error:', setAlarmError);
+			}
 		}
 	}
 }
+
