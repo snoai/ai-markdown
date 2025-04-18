@@ -1,0 +1,30 @@
+{
+  "name": "AI-MD Docs",
+  "logo": "", // Optional: Add path to your logo
+  "favicon": "", // Optional: Add path to your favicon
+  "colors": {
+    "primary": "#0D9373",
+    "light": "#07C983",
+    "dark": "#0D9373",
+    "anchors": {
+      "from": "#0D9373",
+      "to": "#07C983"
+    }
+  },
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "introduction" // Reference the markdown/aimd file (without extension)
+        // Add more pages here
+      ]
+    }
+    // Add more navigation groups here
+  ],
+  "footerSocials": {
+    // Optional: Add social links
+    // "twitter": "https://twitter.com/mintlify",
+    // "github": "https://github.com/mintlify"
+  },
+  "openapi": [] // Optional: Add OpenAPI spec paths
+} 
