@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AI-MD! We welcome contributions f
 
 1. **Fork the Repository**
    - Fork the repository on GitHub
-   - Clone your fork locally: `git clone https://github.com/snoai/aimd.git`
+   - Clone your fork locally: `git clone https://github.com/snoai/ai-markdown.git`
 
 2. **Install Dependencies**
    ```bash
