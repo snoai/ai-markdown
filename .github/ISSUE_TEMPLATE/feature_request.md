@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for improving AI-MD
+about: Suggest an idea for improving AI-Markdown
 title: "[FEATURE] "
 labels: enhancement
 assignees: ""

@@ -1,6 +1,6 @@
-# Contributing to AI-MD
+# Contributing to AI-Markdown
 
-Thank you for your interest in contributing to AI-MD! We welcome contributions from the community and are pleased to have you join us.
+Thank you for your interest in contributing to AI-Markdown! We welcome contributions from the community and are pleased to have you join us.
 
 ## Getting Started
 
@@ -53,7 +53,7 @@ Thank you for your interest in contributing to AI-MD! We welcome contributions f
    ```
 
 2. **Create a Pull Request**
-   - Go to the AI-MD repository on GitHub
+   - Go to the AI-Markdown repository on GitHub
    - Click "New Pull Request"
    - Choose your fork and branch
    - Fill in the PR template with all relevant information
@@ -90,4 +90,4 @@ Thank you for your interest in contributing to AI-MD! We welcome contributions f
 
 ## License
 
-By contributing to AI-MD, you agree that your contributions will be licensed under its MIT license. 
+By contributing to AI-Markdown, you agree that your contributions will be licensed under its MIT license. 

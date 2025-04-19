@@ -25,7 +25,7 @@ Project maintainers are responsible for clarifying and enforcing our standards o
 This Code of Conduct applies within project spaces and in public spaces when an individual is representing the project or its community.
 
 ## Enforcement
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at <EMAIL ADDRESS> or by filing an issue at https://github.com/yourusername/ai-md/issues. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at <EMAIL ADDRESS> or by filing an issue at https://github.com/snoai/ai-markdown/issues. All complaints will be reviewed and investigated promptly and fairly.
 
 ## Attribution
 This Code of Conduct is adapted from the Contributor Covenant, version 2.1, available at https://www.contributor-covenant.org/version/2/1/code_of_conduct.html 
