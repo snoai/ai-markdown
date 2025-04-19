@@ -84,7 +84,7 @@ ${JSON.stringify(script, null, 2)}
 
   // 4. Append Footnote Relationships
   Object.entries(relationships).forEach(([refId, relationship]) => {
-    aimdString += \`[^${refId}]: ${JSON.stringify(relationship)}\\n\`;
+    aimdString += \`[^${refId}]: \`${JSON.stringify(relationship)}\`\`;
   });
 
   return aimdString.trim();
@@ -139,15 +139,15 @@ This is the primary content.
 
 It references another document[^ref1].
 
-\`\`\`ai-script
+```ai-script
 {
   "script-id": "summary-01",
   "prompt": "Summarize the above section.",
   "priority": "medium"
 }
-\`\`\`
+```
 
-[^ref1]: {"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}
+[^ref1]: `{"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}`
 */
 ```
 
@@ -169,8 +169,8 @@ interface DecodedAimd {
 
 // Improved Regex - handles potential spaces around ```ai-script
 // Still basic, might need refinement for edge cases like escaped backticks within JSON
-const aiScriptRegex = /^\\s*```ai-script\\s*\\n([\\s\\S]*?)\\n\\s*```\\s*$/gm;
-const footnoteRegex = /^\\^\\\[(.+?)\\]:\\s*({\\s*.*?\\s*})$/gm; // Allow whitespace in JSON part
+const aiScriptRegex = /^\s*```ai-script\s*\n([\s\S]*?)\n\s*```\s*$/gm;
+const footnoteRegex = /^\[\^(.+?)\]:\s*`({.*?})`$/gm; // Match footnotes with backticked JSON
 
 function decodeAimd(aimdString: string): DecodedAimd {
   // 1. Extract Front Matter and Content
@@ -184,7 +184,7 @@ function decodeAimd(aimdString: string): DecodedAimd {
     try {
       aiScripts.push(JSON.parse(scriptContent));
     } catch (e) {
-      console.error('Failed to parse AI script JSON:', e, '\\nContent:', scriptContent);
+      console.error('Failed to parse AI script JSON:', e, '\nContent:', scriptContent);
       // Keep the block in content if it fails to parse
       return match;
     }
@@ -193,20 +193,19 @@ function decodeAimd(aimdString: string): DecodedAimd {
   });
   remainingContent = remainingContent.trim();
 
-
   // 3. Extract Footnote Relationships
   const relationships: { [key: string]: Relationship } = {};
-   remainingContent = remainingContent.replace(footnoteRegex, (match, refId, relationshipJson) => {
-     try {
-       relationships[refId] = JSON.parse(relationshipJson);
-       // Return empty string to remove the footnote definition
-       return '';
-     } catch (e) {
-       console.error(\`Failed to parse relationship JSON for [^\${refId}]:\`, e, '\\nContent:', relationshipJson);
-       // Keep the line if parse fails
-       return match;
-     }
-   });
+  remainingContent = remainingContent.replace(footnoteRegex, (match, refId, relationshipJson) => {
+    try {
+      relationships[refId] = JSON.parse(relationshipJson);
+      // Return empty string to remove the footnote definition
+      return '';
+    } catch (e) {
+      console.error(\`Failed to parse relationship JSON for [^\${refId}]:\`, e, '\\nContent:', relationshipJson);
+      // Keep the line if parse fails
+      return match;
+    }
+  });
   remainingContent = remainingContent.trim(); // Trim again after removals
 
   return {
@@ -243,8 +242,8 @@ It references another document[^ref1].
 
 Some more text here.
 
-[^ref1]: {"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}
-[^ref2]: {"rel_type":"child","doc_id":"doc-child-456","rel_desc":"Details section A"}
+[^ref1]: `{"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}`
+[^ref2]: `{"rel_type":"child","doc_id":"doc-child-456","rel_desc":"Details section A"}`
 \`;
 
 const decoded = decodeAimd(aimdInput);
@@ -315,26 +314,26 @@ def encode_aimd(front_matter_dict, main_content, ai_scripts_list=[], relationshi
         aimd_string = file_like_object.getvalue()
 
     # Ensure there's a newline after frontmatter if matter.dump added one
-    if not aimd_string.endswith('\\n'):
-        aimd_string += '\\n'
+    if not aimd_string.endswith('\n'):
+        aimd_string += '\n'
     # Ensure separation between front matter and content
-    if not aimd_string.endswith('\\n\\n'):
-         aimd_string = aimd_string.strip() + '\\n\\n'
+    if not aimd_string.endswith('\n\n'):
+         aimd_string = aimd_string.strip() + '\n\n'
 
 
     # 2. Append Main Content
-    aimd_string += main_content.strip() + '\\n\\n'
+    aimd_string += main_content.strip() + '\n\n'
 
     # 3. Append AI Scripts
     for script in ai_scripts_list:
-        aimd_string += "```ai-script\\n"
-        aimd_string += json.dumps(script, indent=2) + '\\n'
-        aimd_string += "```\\n\\n" # Add extra newline after the block
+        aimd_string += "```ai-script\n"
+        aimd_string += json.dumps(script, indent=2) + '\n'
+        aimd_string += "```\n\n" # Add extra newline after the block
 
     # 4. Append Footnote Relationships
     for ref_id, relationship in relationships_dict.items():
         # Standard footnote format includes a space after the colon
-        aimd_string += f"[^{ref_id}]: {json.dumps(relationship)}\\n"
+        aimd_string += f"[^{ref_id}]: `{json.dumps(relationship)}`\n"
 
     return aimd_string.strip()
 
@@ -383,8 +382,8 @@ import json
 import re
 
 # Updated Regex using standard flags
-ai_script_regex = re.compile(r"^\\s*```ai-script\\s*\\n(.*?)\\n\\s*```\\s*$", re.DOTALL | re.MULTILINE)
-footnote_regex = re.compile(r"^\\^\\\[(.+?)\\]:\\s*({.*?})$", re.MULTILINE)
+ai_script_regex = re.compile(r"^\s*```ai-script\s*\n(.*?)\n\s*```\s*$", re.DOTALL | re.MULTILINE)
+footnote_regex = re.compile(r"^\[\^(.+?)\]:\s*`({.*?})`$", re.MULTILINE)
 
 def decode_aimd(aimd_string):
     """Decodes an AIMD string into its components."""
@@ -412,7 +411,7 @@ def decode_aimd(aimd_string):
             ai_scripts.append(script_json)
             return '' # Remove the block if successfully parsed
         except json.JSONDecodeError as e:
-            print(f"Failed to parse AI script JSON: {e}\\nContent: {script_json_str[:100]}...")
+            print(f"Failed to parse AI script JSON: {e}\nContent: {script_json_str[:100]}...")
             return match.group(0) # Keep block if parsing fails
 
     remaining_content = ai_script_regex.sub(script_replacer, remaining_content).strip()
@@ -427,7 +426,7 @@ def decode_aimd(aimd_string):
             relationships[ref_id] = relationship_json
             return '' # Remove the line if successfully parsed
         except json.JSONDecodeError as e:
-            print(f"Failed to parse relationship JSON for [^{ref_id}]: {e}\\nContent: {rel_json_str}")
+            print(f"Failed to parse relationship JSON for [^{ref_id}]: {e}\nContent: {rel_json_str}")
             return match.group(0) # Keep line if parsing fails
 
     remaining_content = footnote_regex.sub(footnote_replacer, remaining_content).strip()
@@ -465,8 +464,8 @@ It references another document[^ref1].
 
 Some more text here.
 
-[^ref1]: {"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}
-[^ref2]: {"rel_type":"child","doc_id":"doc-child-456","rel_desc":"Details section A"}
+[^ref1]: `{"rel_type":"related","doc_id":"doc-xyz-789","rel_desc":"Provides background information"}`
+[^ref2]: `{"rel_type":"child","doc_id":"doc-child-456","rel_desc":"Details section A"}`
 """
 
 decoded = decode_aimd(aimd_input)

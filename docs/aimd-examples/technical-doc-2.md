@@ -29,6 +29,6 @@ Footnote references appear inline (`[^id]`), and definitions at the bottom carry
 
 ## Footnote Definitions
 
-[^core-spec]: {"rel_type":"reference","doc_id":"tech-doc-001","rel_desc":"Core technical specification overview"}
-[^dyn-gen]: {"rel_type":"related","doc_id":"dyn-gen-001","rel_desc":"Dynamic content generation example"}
-[^md-guide]: {"rel_type":"citation","doc_id":"external-md-guide-uuid","rel_desc":"Official Markdown syntax guide"}
+[^core-spec]: `{"rel_type":"reference","doc_id":"tech-doc-001","rel_desc":"Core technical specification overview"}`
+[^dyn-gen]: `{"rel_type":"related","doc_id":"dyn-gen-001","rel_desc":"Dynamic content generation example"}`
+[^md-guide]: `{"rel_type":"citation","doc_id":"external-md-guide-uuid","rel_desc":"Official Markdown syntax guide"}`

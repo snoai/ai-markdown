@@ -23,6 +23,6 @@ The AI Markdown (AIMD) format extends standard Markdown with optional structured
 
 ## Footnote Definitions
 
-[^fm]: {"rel_type":"related","doc_id":"spec-frontmatter-uuid","rel_desc":"See Front Matter schema for field details"}
-[^ai]: {"rel_type":"child","doc_id":"script-blocks-uuid","rel_desc":"Detailed AI Script Block specification"}
-[^kg]: {"rel_type":"parent","doc_id":"knowledge-graph-uuid","rel_desc":"Overview of Knowledge Graph integration"}
+[^fm]: `{"rel_type":"related","doc_id":"spec-frontmatter-uuid","rel_desc":"See Front Matter schema for field details"}`
+[^ai]: `{"rel_type":"child","doc_id":"script-blocks-uuid","rel_desc":"Detailed AI Script Block specification"}`
+[^kg]: `{"rel_type":"parent","doc_id":"knowledge-graph-uuid","rel_desc":"Overview of Knowledge Graph integration"}`

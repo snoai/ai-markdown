@@ -17,8 +17,9 @@ AIMD allows embedding instructions directly into the document. This can be used 
 
 Quantum entanglement is a physical phenomenon that occurs when a group of particles are generated, interact, or share spatial proximity in such a way that the quantum state of each particle of the group cannot be described independently of the state of the others, including when the particles are separated by a large distance.
 
-<!-- AI-PROCESSOR: The block below asks for a simplified explanation -->
+
 ```ai-script
+<!-- AI-PROCESSOR: The block below asks for a simplified explanation -->
 {
   "script-id": "explain-entanglement-simple",
   "prompt": "Explain the concept of quantum entanglement described above in simpler terms, suitable for a high school student.",
