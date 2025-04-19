@@ -1,5 +1,5 @@
 name = "url2md"
-main = "packages/url2aimd/src/index.ts"
+main = "src/index.ts"
 compatibility_date = "2023-09-04"
 compatibility_flags = [ "nodejs_compat"]
 

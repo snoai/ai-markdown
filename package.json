@@ -1,16 +1,11 @@
 {
-	"name": "url-to-md",
+	"name": "ai-markdown",
 	"version": "0.9.0",
 	"license": "MIT",
 	"workspaces": [
-		"packages/*"
+		"apps/*"
 	],
-	"scripts": {
-		"publish": "pnpm run cf-typegen && wrangler deploy",
-		"dev": "pnpm run cf-typegen && wrangler dev --remote",
-		"cf-typegen": "wrangler types",
-		"type-check": "pnpm run cf-typegen && tsc"
-	},
+	"scripts": {},
 	"devDependencies": {
 		"@types/jsdom": "^21.1.7",
 		"@types/turndown": "^5.0.5",

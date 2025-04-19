@@ -29,13 +29,12 @@
 		"moduleResolution": "node" /* Specify how TypeScript looks up a file from a given module specifier. */,
 		"baseUrl": "." /* Specify the base directory to resolve non-relative module names. */,
 		"paths": {
-			"@/*": ["packages/url2aimd/src/*"]
+			"@/*": ["src/*"]
 		},
 		// "baseUrl": "./",                                  /* Specify the base directory to resolve non-relative module names. */
 		// "paths": {},                                      /* Specify a set of entries that re-map imports to additional lookup locations. */
 		// "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
 		// "typeRoots": [],                                  /* Specify multiple folders that act like `./node_modules/@types`. */
-		// "types": ["@cloudflare/workers-types"] /* Specify type package names to be included without being referenced in a source file. */,
 		// "allowUmdGlobalAccess": true,                     /* Allow accessing UMD globals from modules. */
 		"resolveJsonModule": true /* Enable importing .json files */,
 		// "noResolve": true,                                /* Disallow `import`s, `require`s or `<reference>`s from expanding the number of files TypeScript should add to a project. */
@@ -103,9 +102,9 @@
 		"skipLibCheck": true /* Skip type checking all .d.ts files. */
 	},
 	"include": [
-		"packages/*/src/**/*",
-		"packages/*/tests/**/*",
-		"worker-configuration.d.ts"
+		"src/**/*",
+		"tests/**/*",
+		"./worker-configuration.d.ts"
 	],
 	"exclude": [
 		"node_modules",
