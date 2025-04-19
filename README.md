@@ -50,7 +50,7 @@ You can reference other documents or concepts using footnotes, like this update 
   "id": "instruction_block_1",
   "prompt": "Summarize the key points from the preceding section, focusing on actionable insights.",
   "priority": "medium",
-  "autoRun": true,
+  "auto-run": true,
   "provider": "openai",
   "model-name": "gpt-4o"
 }
@@ -105,7 +105,7 @@ Normal human-readable markdown content goes here.
   "script-id": "summary_request_s9340164234",
   "prompt": "Summarize the preceding section.",
   "priority": "medium",
-  "autoRun": true,
+  "auto-run": true,
   "provider": "openai",
   "model-name": "gpt-4o"
 }
@@ -119,7 +119,7 @@ The `ai-script` block contains structured JSON data specifying the instruction:
 *   `script-id`: (String) A unique identifier for this specific instruction block.
 *   `prompt`: (String) The prompt or command text for the LLM.
 *   `priority`: (String) Helps the LLM prioritize if multiple instructions exist (e.g., "high", "medium", "low").
-*   `autoRun`: (Boolean) Indicates if the instruction should be executed automatically by a processing agent.
+*   `auto-run`: (Boolean) Indicates if the instruction should be executed automatically by a processing agent.
 *   `provider`: (String, Optional) Specifies the AI provider (e.g., "openai", "anthropic", "google").
 *   `model-name`: (String, Optional) Specifies the target model (e.g., "gpt-4o", "claude-3-opus").
 
@@ -284,7 +284,7 @@ This domain is established to be used for illustrative examples in documents and
   "id": "page_overview_request",
   "prompt": "Provide a brief overview of this page based on its content.",
   "priority": "medium",
-  "autoRun": false
+  "auto-run": false
 }
 ```
 
