@@ -5,66 +5,86 @@
 
 ---
 
-## Introduction
+## Motivation & Introduction
 
-**AI Markdown (AIMD)** is an extension of standard Markdown designed to enhance content for Retrieval-Augmented Generation (RAG) and seamless integration with LLM agents. It elegantly combines Markdown's simplicity with structured metadata and AI-specific instructions, making it ideal for advanced RAG pipelines, intelligent documentation, and autonomous agent workflows.
+Large Language Models (LLMs) and AI agents increasingly rely on processing diverse content, but standard formats often lack the necessary structure and context for optimal performance. Converting complex web pages or documents into LLM-friendly plain text can be imprecise, losing valuable metadata and structural information.
 
-## What Is AIMD?
+**AI Markdown (AIMD)** addresses this challenge by extending standard Markdown with optional, structured components designed specifically for AI consumption. It enhances content for Retrieval-Augmented Generation (RAG), seamless integration with LLM agents, and robust knowledge graph construction. AIMD elegantly combines Markdown's readability with:
 
-AIMD enhances standard Markdown by incorporating three key, but optional components:
+1.  **Structured Metadata (YAML Front Matter):** Provides rich context about the document.
+2.  **Embedded AI Instructions (`ai-script` blocks):** Allows direct commands for LLM processing within the content.
+3.  **Explicit Document Relationships (Footnotes):** Defines connections between documents for deeper understanding.
 
-1.  **YAML Front Matter:** Provides structured metadata about the document.
-2.  **`ai-script` Code Blocks:** Embeds specific instructions for LLM processing directly within the content.
-3.  **Markdown Footnotes:** Defines relationships between documents using a structured format.
+AIMD files remain perfectly readable by humans and standard Markdown renderers, while providing enhanced data for AI systems when parsed directly.
 
-**All components – Front Matter, `ai-script` blocks, and Footnotes – are optional**, offering flexibility in how AIMD is utilized.
+## What Is AIMD? (Core Components)
 
-Common Markdown renderers will parse AIMD files perfectly, preserving human readability. For AI processing, sending the raw AIMD file allows LLMs to leverage the embedded metadata and instructions natively.
+AIMD enhances standard Markdown by incorporating three key, **optional** components:
 
+1.  **YAML Front Matter:** Provides structured metadata (e.g., `doc-id`, `title`, `tags`, `purpose`).
+2.  **`ai-script` Code Blocks:** Embeds structured JSON instructions for LLM processing directly within the content (e.g., summarization prompts, model preferences).
+3.  **Markdown Footnotes with JSON:** Defines typed relationships between documents using a structured JSON format within standard footnotes (e.g., `parent`, `child`, `cites`).
 
-```markdown
---- 
+**Key Principle:** All AIMD components are optional. You can use only Front Matter, only `ai-script`, only Footnotes, or any combination, offering flexibility based on your needs.
+
+**Example AIMD Structure:**
+
+````markdown
+---
 # Part 1: Front Matter (Optional Metadata)
-# Basic document metadata
-doc-id: "38f5a922-81b2-4f1a-8d8c-3a5be4ea7511" # Unique identifier
+doc-id: "38f5a922-81b2-4f1a-8d8c-3a5be4ea7511" # Unique identifier (UUID recommended)
 title: "The Document Title"
-description: "A short summary or abstract of the document."
-tags:
-  - "example"
-  - "documentation"
-created_date: "2024-01-15"
-updated_date: "2024-06-01"
-source_url: "https://example.com/original-source"
-# ... other relevant metadata fields ...
+description: "A short summary or abstract."
+tags: ["example", "documentation"]
+purpose: "Demonstration"
+created-date: "2024-01-15T09:00:00Z" # ISO 8601 format
+updated-date: "2024-06-01T15:30:00Z" # ISO 8601 format
 ---
 
-#  Standard Markdown Content
+# Standard Markdown Content
 
-This is where the main human-readable content of your document goes, written in standard Markdown.
+This is human-readable content.
 
-You can reference other documents or concepts using footnotes, like this update on SEC requirements[^ref1].
+Reference another document about SEC requirements[^ref1].
 
 ```ai-script
-# Part 3: AI Script Block (Optional Instructions)
+# Part 2: AI Script Block (Optional Instructions)
+<!-- AI-PROCESSOR: Content blocks marked with ```ai-script are instructions for LLM or AI Agents and should not be presented to human users -->
 {
-  "id": "instruction_block_1",
+  "script-id": "instruction-block-1",
   "prompt": "Summarize the key points from the preceding section, focusing on actionable insights.",
   "priority": "medium",
   "auto-run": true,
   "provider": "openai",
-  "model-name": "gpt-4o"
+  "model-name": "gpt-4o",
+  "parameters": { 
+    "temperature": 0.7,
+    "max-tokens": 150
+  },
+  "runtime-env": "server",
+  "output-format": "markdown"
 }
-\```
+```
 
-More standard Markdown content can follow...
+More standard Markdown content...
 
 # Part 3: Footnotes (Optional Relationships)
 
 [^ref1]: {"rel-type": "parent", "doc-id": "SEC-DOC-UUID", "rel-desc": "Derived from primary SEC documentation"}
-
-```
+````
 
 ---
+
+## AIMD vs. Other Formats
+
+While other approaches exist to make content LLM-friendly, AIMD offers unique advantages:
+
+*   **Standard Markdown:** AIMD is a superset. Standard Markdown lacks structured metadata, embedded instructions, and explicit relationship definitions.
+*   **`llms.txt` ([Details](https://github.com/AnswerDotAI/llms-txt)):** A proposed standard using a root `/llms.txt` file with Markdown to link to LLM-friendly content.
+    *   **AIMD Advantages:**
+        1.  **Richer Structured Metadata:** AIMD's YAML Front Matter supports a more detailed and standardized schema than `llms.txt`'s basic structure, enabling deeper context and complex filtering.
+        2.  **Embedded AI Instructions:** AIMD's `ai-script` blocks provide fine-grained, in-context control over LLM processing, unlike `llms.txt` which primarily links to content.
+        3.  **Explicit Document Relationships:** AIMD's structured JSON footnotes offer a more robust way to define typed relationships for knowledge graphs compared to `llms.txt`'s simpler annotated links.
 
 ## AIMD Specification Details
 
@@ -72,134 +92,107 @@ More standard Markdown content can follow...
 
 Provides structured metadata using YAML syntax, enclosed by `---` delimiters.
 
-
-
 | Field           | Type          | Description                                                                 | Example                     |
 | --------------- | ------------- | --------------------------------------------------------------------------- | --------------------------- |
-| `doc-id`            | `string`      | A unique identifier (e.g., UUID) for this document. Crucial for relationships.| `"38f5a922-81b2-4f1a-8d8c-3a5be4ea7511"` |
+| `doc-id`            | `string`      | A unique identifier for this document (UUID format recommended). Crucial for relationships. | `"38f5a922-81b2-4f1a-8d8c-3a5be4ea7511"` |
 | `title`         | `string`      | The main title of the document.                                             | `"Introduction to AIMD"`      |
 | `description`   | `string`      | A brief summary or abstract of the document's content.                      | `"Explains the AIMD format."` |
 | `tags`          | `list[string]`| Keywords or categories for classification and retrieval.                    | `["markdown", "ai", "rag"]` |
-| `created_date`  | `date`        | ISO 8601 date when the document was originally created.                     | `"2024-01-15"`              |
-| `updated_date`  | `date`        | ISO 8601 date when the document was last significantly updated.             | `"2024-06-01"`              |
-| `expired_date`  | `date`        | Optional ISO 8601 date when the content should be considered outdated.      | `"2025-01-01"`              |
+| `created-date`  | `string`        | ISO 8601 timestamp (date and time with timezone) when the document was originally created. | `"2024-01-15T09:00:00Z"`              |
+| `updated-date`  | `string`        | ISO 8601 timestamp when the document was last significantly updated.      | `"2024-06-01T15:30:00Z"`              |
+| `expired-date`  | `string`        | Optional ISO 8601 timestamp when the content should be considered outdated. | `"2025-01-01T00:00:00Z"`              |
 | `globs`         | `string`      | File or URL patterns this metadata applies to (e.g., `docs/**/*.md`).        | `"*.md"`                    |
 | `audience`      | `string`      | Describes the intended audience (e.g., "developers", "end-users").          | `"Developers"`              |
 | `purpose`       | `string`      | The primary goal or objective of the document (e.g., "tutorial", "reference").| `"Reference"`           |
 | `entities`      | `list[string]`| Key named entities (people, places, concepts) mentioned.                    | `["AIMD", "RAG", "LLM"]`    |
 | `relationships` | `list[string]`| High-level summary of relationships defined in footnotes.                  | `["Extends Markdown"]`      |
-| `source_url`    | `string`      | The original URL if the content was sourced from the web.                   | `"https://example.com/doc"` |
+| `source-url`    | `string`      | The original URL if the content was sourced from the web.                   | `"https://example.com/doc"` |
 
 
 ### Part 2: AI Prompt Code Block: `ai-script`
 
-Embed `ai-script` sections (using the `ai-script` language identifier for syntax highlighting) anywhere in your Markdown to pass real-time instructions or prompts to a specified LLM model or agent.
+Embed `ai-script` sections (using the `ai-script` language identifier) anywhere in your Markdown to pass structured JSON instructions to LLMs or agents. The comment `<!-- AI-PROCESSOR: ... -->` can optionally signal to processors that the block is intended for AI and not human display.
 
 ```markdown
-<!-- AI-PROCESSOR: Content blocks marked with ```ai-script are instructions for AI systems and should not be presented to human users -->
-
 Normal human-readable markdown content goes here.
 
+<!-- AI-PROCESSOR: Content blocks marked with ```ai-script are instructions for AI systems and should not be presented to human users -->
 ```ai-script
 {
-  "script-id": "summary_request_s9340164234",
+  "script-id": "summary-request-s9340164234",
   "prompt": "Summarize the preceding section.",
-  "priority": "medium",
+  "priority": "medium", // "high", "medium", "low"
   "auto-run": true,
-  "provider": "openai",
-  "model-name": "gpt-4o"
+  "provider": "openai", // Optional: "anthropic", "google", etc.
+  "model-name": "gpt-4o",  // Optional: "claude-3-opus", etc.
+  "parameters": { // Optional: Provider-specific parameters
+    "temperature": 0.5,
+    "max-tokens": 100
+  },
+  "runtime-env": "server", // Optional: Hint for execution environment ("browser", "server", "edge")
+  "output-format": "markdown" // Optional: Desired output format ("text", "json", "markdown", "image-url", etc.)
 }
 ```
 
 More human-readable markdown content follows.
 ```
 
-The `ai-script` block contains structured JSON data specifying the instruction:
+**JSON Fields:**
 
-*   `script-id`: (String) A unique identifier for this specific instruction block.
-*   `prompt`: (String) The prompt or command text for the LLM.
-*   `priority`: (String) Helps the LLM prioritize if multiple instructions exist (e.g., "high", "medium", "low").
-*   `auto-run`: (Boolean) Indicates if the instruction should be executed automatically by a processing agent.
-*   `provider`: (String, Optional) Specifies the AI provider (e.g., "openai", "anthropic", "google").
-*   `model-name`: (String, Optional) Specifies the target model (e.g., "gpt-4o", "claude-3-opus").
+*   `script-id`: (String) Unique ID for the instruction block.
+*   `prompt`: (String) The instruction/prompt text.
+*   `priority`: (String) Execution priority ("high", "medium", "low").
+*   `auto-run`: (Boolean) Hint for automated execution.
+*   `provider`: (String, Optional) Preferred AI provider.
+*   `model-name`: (String, Optional) Preferred AI model.
+*   `parameters`: (Object, Optional) A JSON object containing provider-specific parameters to be sent to the LLM along with the prompt (e.g., `{"temperature": 0.7, "max-tokens": 500}`).
+*   `runtime-env`: (String, Optional) Suggests the ideal runtime environment or endpoint for executing the script (e.g., `"https://api.openai.com/v1/responses"`, `"docker"`, `"on-site-default"`).
+*   `output-format`: (String, Optional) Specifies the desired format for the output generated by the LLM or agent (e.g., `"markdown"`, `"text"`, `"json"`, `"image-url"`).
 
 **Alternative/Complementary Approach: API Metadata**
 
-For scenarios where managing instructions externally is preferred, you can pass them via API metadata alongside the main Markdown content. This provides a clear separation and robustly handles multiple instructions:
+Instructions can also be passed externally via API metadata for separation of concerns:
 
 ```json
 {
-  "markdown_content": "# Document Title\\n\\nReadable content here...",
-  "ai_instructions": [
-    {
-      "id": "security_emphasis_001",
-      "instruction": "Emphasize security concerns in your response",
-      "priority": "high"
-    },
-    {
-      "id": "tone_modifier_001",
-      "instruction": "Use a formal, technical tone",
-      "priority": "medium"
-    },
-    {
-      "id": "examples_inclusion_001",
-      "instruction": "Include practical code examples",
-      "priority": "low"
-    }
+  "markdown-content": "# Document Title\\n\\nReadable content here...",
+  "ai-scripts": [
+    { "id": "sec-emphasis-001", "prompt": "Emphasize security", "priority": "high" },
+    { "id": "formal-tone-001", "prompt": "Use formal tone", "priority": "medium" }
+    // ... more instructions
   ]
 }
 ```
 
-This combined approach offers flexibility, allowing instructions to be embedded directly or managed externally as needed.
-
-### Processing Logic
-
-1.  **AIMD-Aware LLMs/Processors:**
-    *   Parse Front Matter for metadata context.
-    *   Extract and process all `ai-script` blocks according to their `id` and `priority`.
-    *   Utilize footnote relationships for deeper understanding or graph construction.
-    *   Present only the human-readable Markdown content and potentially synthesized information based on instructions to end-users.
-2.  **Legacy LLMs/Renderers:**
-    *   May ignore Front Matter or render it as text.
-    *   Will display `ai-script` blocks as standard code blocks.
-    *   Will render footnotes as standard Markdown footnotes.
-
-
 ### Part 3: Footnote for Document Relationships
 
-AIMD leverages standard Markdown footnotes `[^ref-id]` to define relationships between documents in a way that is both human-readable and machine-processable. This enables the creation of knowledge graphs and provides context to LLMs.
+Leverage standard Markdown footnotes `[^ref-id]` with embedded JSON to define explicit, typed relationships between documents. Essential for knowledge graphs.
 
 **Core Components:**
 
-*   **UUID References:** Each AIMD document should have a unique `id` in its Front Matter.
-*   **Relationship Types:** Explicit descriptors define the nature of the link (e.g., `parent`, `child`, `related`, `cites`).
-*   **Footnote Syntax:** Standard Markdown footnotes `[^ref-id]: ...` contain a JSON payload describing the relationship.
+*   **`doc-id` References:** Each AIMD document needs a unique `doc-id` in its Front Matter.
+*   **Relationship Types:** Defined in the JSON (e.g., `parent`, `child`, `related`, `cites`, `supports`, `contradicts`).
+*   **Footnote Syntax:** `[^ref-id]: { ... JSON payload ... }`
 
 **Implementation Example:**
 
 ```markdown
-# Document: Financial Regulations Update
+This document outlines changes[^ref1] and implications[^ref2].
 
-This document outlines changes to SEC requirements[^ref1] and includes implications for international traders[^ref2].
-
-Normal content continues here...
-
-[^ref1]: {"rel_type": "parent", "doc_id": "38f5a922-81b2-4f1a-8d8c-3a5be4ea7511", "rel_desc": "Derived from primary SEC documentation"}
-[^ref2]: {"rel_type": "related", "doc_id": "7db9c1f2-5e3a-42d1-a1b8-c963f7be8962", "rel_desc": "Provides international context"}
+[^ref1]: {"rel-type": "parent", "doc-id": "UUID-of-parent-doc", "rel-desc": "Derived from SEC docs"}
+[^ref2]: {"rel-type": "related", "doc-id": "UUID-of-related-doc", "rel-desc": "Provides context"}
 ```
 
 **Enhanced Relationship Schema (JSON within Footnote):**
 
-You can include richer information within the JSON payload of the footnote:
-
 ```json
 {
-  "rel_type": "citation|parent|child|contradicts|supports|extends", // Choose one
-  "doc_id": "UUID-of-target-document", // The `id` from the target document's Front Matter
-  "rel_desc": "Human readable description of the relationship", // Brief explanation
-  "rel_strength": 0.8,         // Optional confidence/relevance score (0-1)
-  "bi_directional": true,      // Optional: Whether the relationship implies a link back
-  "context": {                 // Optional: Contextual details about the link
+  "rel-type": "citation|parent|child|contradicts|supports|extends", // Choose one
+  "doc-id": "UUID-of-target-document", // Target document's `doc-id`
+  "rel-desc": "Human-readable description of the relationship",
+  "rel-strength": 0.8,         // Optional: Confidence/relevance score (0-1)
+  "bi-directional": true,      // Optional: If the relationship implies a link back
+  "context": {                 // Optional: Details about the link's location/nature
     "section": "Introduction",
     "relevance": "High"
   }
@@ -208,21 +201,27 @@ You can include richer information within the JSON payload of the footnote:
 
 **Benefits:**
 
-*   **Human-Readable:** Uses familiar Markdown footnote syntax.
-*   **Machine-Processable:** Structured JSON is easily parsed by tools and LLMs.
-*   **Explicit Relationships:** Clearly defines how documents connect.
-*   **Lightweight:** Integrates seamlessly into standard Markdown.
-*   **Graph-Ready:** Enables automatic construction of knowledge graphs from a collection of AIMD documents.
+*   **Human-Readable & Machine-Processable:** Combines familiar syntax with structured data.
+*   **Explicit & Typed Relationships:** Clearly defines how documents connect.
+*   **Graph-Ready:** Enables automatic knowledge graph construction.
+
+---
+
+## Processing Logic & Best Practices
+
+*   **AIMD-Aware Processors:** Should parse Front Matter, extract and prioritize `ai-script` blocks, and interpret footnote relationships. Only human-readable Markdown and synthesized outputs should be shown to end-users.
+*   **Legacy Renderers:** Will typically ignore Front Matter or render it as text, display `ai-script` as code blocks, and show footnotes normally.
+*   **Clean `.md` Files:** Inspired by `llms.txt`, a recommended best practice is to provide clean, AIMD-formatted Markdown versions of content whenever possible (e.g., alongside HTML). Tools like `url2md` (see below) facilitate this.
 
 ---
 
 ## url2md: Reference Implementation
 
-This repository also includes `url2md`, a reference implementation demonstrating best practices for converting any website URL into the AIMD format.
+This repository includes `url2md`, a Cloudflare Worker demonstrating how to convert website URLs into AIMD format.
 
-*   **Fetch & Render**: Leverages Cloudflare Browser Rendering to accurately load dynamic web content.
-*   **Convert to Markdown**: Uses Turndown to generate clean Markdown, automatically attempting to populate Front Matter fields.
-*   **Durable Caching**: Implements optional KV storage for efficient caching of parsed results.
+*   **Fetch & Render**: Uses Cloudflare Browser Rendering for dynamic content.
+*   **Convert to Markdown**: Employs Turndown and attempts to auto-populate Front Matter.
+*   **Optional Caching**: Supports KV storage.
 
 ## Quickstart for `url2md`
 
@@ -235,7 +234,7 @@ cd aimd
 pnpm install
 
 # (Optional) Create a KV namespace for caching
-npx wrangler kv:namespace create md_cache
+npx wrangler kv:namespace create md-cache
 
 # Update wrangler.toml with your account ID and (if using cache) KV namespace ID
 # Deploy the Cloudflare Worker
@@ -269,8 +268,8 @@ title: "Example Domain"
 description: "Illustrative example domain for testing purposes."
 tags:
   - "example"
-created_date: "2024-06-01" # Date of conversion
-source_url: "https://example.com"
+created-date: "2024-06-01T15:30:00Z" # Date of conversion
+source-url: "https://example.com"
 # ... other auto-populated fields ...
 ---
 
@@ -281,7 +280,7 @@ This domain is established to be used for illustrative examples in documents and
 <!-- AI-PROCESSOR: Content blocks marked with ```ai-script are instructions for AI systems and should not be presented to human users -->
 ```ai-script
 {
-  "id": "page_overview_request",
+  "id": "page-overview-request",
   "prompt": "Provide a brief overview of this page based on its content.",
   "priority": "medium",
   "auto-run": false
@@ -292,7 +291,7 @@ This domain is established to be used for illustrative examples in documents and
 
 ## Contributing
 
-We welcome contributions! Please fork the repository, make your changes, and open a pull request. For major changes, please open an issue first to discuss your proposed modifications.
+We welcome contributions! Please fork, make changes, and open a pull request. Discuss major changes via issues first.
 
 ## License
 
@@ -300,54 +299,14 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ---
 
+## Next Steps & Ecosystem
 
+The AIMD specification is evolving. Future work includes:
 
-# URL to MarkDown 📝  (Reference Implementation #1)
+*   Developing standardized parsers and libraries for various languages.
+*   Integrating AIMD support into RAG frameworks and agent platforms.
+*   Building a community around best practices and extensions.
+*   Exploring validation tools for AIMD syntax and schema.
 
-A fast tool to convert any website into LLM-ready AI-markdown data.
-
-## Features 🚀
-
-- Convert any website into markdown
-- LLM Filtering
-- Detailed markdown mode
-- Auto Crawler (without sitemap!)
-- Text and JSON responses
-- Easy to self-host
-
-##### _REQUIRED PARAMETERS_
-
-url (string) -> The website URL to convert into markdown.
-
-##### _OPTIONAL PARAMETERS_
-
-`htmlDetails` (boolean: false) -> Toggle for detailed response with full HTML content.
-`subpages` (boolean: false) -> Crawl and return markdown for up to 10 sub-pages.
-`llmFilter` (boolean: false) -> Filter out unnecessary information using LLM.
-
-##### _Response Types_
-
-Add `Content-Type: text/plain` in headers for plain text response.
-Add `Content-Type: application/json` in headers for JSON response.
-
-## Tech
-
-Under the hood, Markdown utilizes Cloudflare's [Browser rendering](https://developers.cloudflare.com/browser-rendering/) and [Durable objects](https://developers.cloudflare.com/durable-objects/) to spin up browser instances and then convert it to markdown using Turndown.
-
----
-
-1. Clone the repo and download dependencies
-
-```
-git clone https://github.com/snoai/aimd.git
-pnpm i
-```
-
-2. Run this command:
-   ```
-   npx wrangler kv:namespace create md_cache
-   ```
-3. Open wrangler.toml and change the IDs accordingly
-4. Run `pnpm deploy`
-5. That's it 👍
+Join the discussion and help shape the future of AI-native content!
 
